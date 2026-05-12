@@ -43,4 +43,17 @@ bin/
 
 ### Project artifacts ###
 test-recording.wav
+*.wav
 /interview-assistant-data/
+
+### Secrets and local config ###
+.env
+*.env
+local.properties
+config.properties
+
+### Personal project spec (not for public repo) ###
+PROJECT_SPEC.md
+
+### Claude Code local settings ###
+.claude/
