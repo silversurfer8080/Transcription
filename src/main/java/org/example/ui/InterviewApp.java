@@ -252,10 +252,7 @@ public class InterviewApp extends Application {
                     setSessionControlsEnabled(true);
                     sessionBtn.setText("▶  Start Session");
                     statusDot.setFill(Color.LIGHTGRAY);
-                    String detail = (ex.getMessage() != null && !ex.getMessage().isBlank())
-                            ? sanitizeErrorMessage(ex.getMessage())
-                            : ex.getClass().getSimpleName();
-                    showAlert("Falha na conexão", detail);
+                    showAlert("Falha na conexão", extractErrorDetail(ex));
                 });
             }
         });
@@ -387,6 +384,22 @@ public class InterviewApp extends Application {
 
     private static String sanitizeErrorMessage(String msg) {
         return msg.replaceAll("(?i)(token|key|auth(orization)?)[^\\s]*\\s*[=:]?\\s*\\S+", "[REDACTED]");
+    }
+
+    // Walks the cause chain to find the deepest non-null message, then translates
+    // common HTTP status codes into actionable descriptions.
+    private static String extractErrorDetail(Throwable ex) {
+        String msg = null;
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && !t.getMessage().isBlank()) {
+                msg = t.getMessage();
+            }
+        }
+        if (msg == null) msg = ex.getClass().getSimpleName();
+        if (msg.contains("401")) return "API key inválida ou expirada (401). Verifique a chave e tente novamente.";
+        if (msg.contains("403")) return "Acesso negado pelo servidor STT (403). Verifique permissões da API key.";
+        if (msg.contains("429")) return "Limite de requisições atingido (429). Aguarde alguns instantes e tente novamente.";
+        return sanitizeErrorMessage(msg);
     }
 
     private void showAlert(String title, String message) {
