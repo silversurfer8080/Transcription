@@ -258,6 +258,9 @@ public class InterviewApp extends Application {
             return;
         }
 
+        // Clear any leftover panels from a previous session before starting fresh
+        questionsBox.getChildren().clear();
+        questionPanels.clear();
         questionCounter = 0;
         sessionQuestions.clear();
         setSessionControlsEnabled(false);
@@ -347,10 +350,16 @@ public class InterviewApp extends Application {
             if (mProv != null) mProv.stop();
             if (cProv != null) cProv.stop();
             Platform.runLater(() -> {
+                // Clear all question panels — session is over, app is ready for a new interview
+                questionsBox.getChildren().clear();
+                questionPanels.clear();
+                sessionQuestions.clear();
+                questionCounter = 0;
+
                 setSessionControlsEnabled(true);
                 sessionBtn.setText("▶  Start Session");
                 statusDot.setFill(Color.LIGHTGRAY);
-                log.info("Session stopped");
+                log.info("Session stopped and cleared");
             });
         });
     }
