@@ -187,7 +187,7 @@ public class InterviewApp extends Application {
         newQuestionBtn.setDisable(true);
         newQuestionBtn.setOnAction(e -> onNewQuestion());
 
-        saveSessionBtn = new Button("💾  Salvar Sessão");
+        saveSessionBtn = new Button("🗑️  Fechar Sessão");
         saveSessionBtn.setDisable(true);
         saveSessionBtn.setOnAction(e -> onSaveSession());
 
@@ -350,16 +350,12 @@ public class InterviewApp extends Application {
             if (mProv != null) mProv.stop();
             if (cProv != null) cProv.stop();
             Platform.runLater(() -> {
-                // Clear all question panels — session is over, app is ready for a new interview
-                questionsBox.getChildren().clear();
-                questionPanels.clear();
-                sessionQuestions.clear();
-                questionCounter = 0;
-
                 setSessionControlsEnabled(true);
                 sessionBtn.setText("▶  Start Session");
                 statusDot.setFill(Color.LIGHTGRAY);
-                log.info("Session stopped and cleared");
+                // Keep save/clear button available so the user can review then explicitly clear
+                saveSessionBtn.setDisable(questionPanels.isEmpty());
+                log.info("Session stopped");
             });
         });
     }
@@ -416,6 +412,19 @@ public class InterviewApp extends Application {
     }
 
     private void onSaveSession() {
+        ButtonType btnClear  = new ButtonType("Limpar", ButtonBar.ButtonData.OK_DONE);
+        ButtonType btnCancel = new ButtonType("Cancelar", ButtonBar.ButtonData.CANCEL_CLOSE);
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.setTitle("Fechar sessão");
+        confirm.setHeaderText(null);
+        confirm.setContentText(
+                "Limpar todos os painéis e preparar para a próxima entrevista?\n\n" +
+                "Os arquivos TXT e WAV já foram salvos automaticamente em disco.");
+        confirm.getButtonTypes().setAll(btnClear, btnCancel);
+        confirm.showAndWait().ifPresent(bt -> { if (bt == btnClear) doClearSession(); });
+    }
+
+    private void doClearSession() {
         if (activeQuestion != null) {
             activeQuestion.markStopped();
             activeQuestion = null;
@@ -432,7 +441,7 @@ public class InterviewApp extends Application {
         candidateField.clear();
         jobField.setDisable(false);
         jobField.clear();
-        log.info("Session saved and cleared — ready for next candidate");
+        log.info("Session cleared — ready for next candidate");
     }
 
     private void onOpenSession() {
@@ -460,14 +469,7 @@ public class InterviewApp extends Application {
             return;
         }
 
-        // Clear current panels — same as onSaveSession() but without writing a new TXT
-        if (activeQuestion != null) { activeQuestion.markStopped(); activeQuestion = null; }
-        closeSessionTxt();
-        questionsBox.getChildren().clear();
-        sessionQuestions.clear();
-        questionPanels.clear();
-        questionCounter = 0;
-        saveSessionBtn.setDisable(true);
+        doClearSession();
 
         // Derive company/candidate from filename (best-effort: Company_Candidate.txt)
         String filename = file.getName();
