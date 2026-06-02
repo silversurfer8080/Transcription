@@ -10,13 +10,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-public class AnthropicClient {
+public class GroqClient {
 
-    private static final String API_URL = "https://api.anthropic.com/v1/messages";
-    private static final String MODEL   = "claude-sonnet-4-6";
+    private static final String API_URL = "https://api.groq.com/openai/v1/chat/completions";
+    private static final String MODEL   = "llama-3.3-70b-versatile";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private AnthropicClient() {}
+    private GroqClient() {}
 
     public static String analyzePronunciation(String apiKey, String transcript, String focusWord)
             throws Exception {
@@ -41,9 +41,8 @@ public class AnthropicClient {
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(API_URL))
-                .header("x-api-key", apiKey)
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
                 .build();
 
@@ -53,22 +52,16 @@ public class AnthropicClient {
                 throw new RuntimeException(buildErrorMessage(response.statusCode(), response.body()));
             }
             JsonNode root = MAPPER.readTree(response.body());
-            return root.path("content").get(0).path("text").asText();
+            return root.path("choices").get(0).path("message").path("content").asText();
         }
     }
 
-    // Parses the Anthropic error body to produce a clean, key-safe message.
     private static String buildErrorMessage(int status, String body) {
-        String type = "";
         String detail = "";
         try {
-            JsonNode err = MAPPER.readTree(body).path("error");
-            type   = err.path("type").asText("");
-            detail = err.path("message").asText("");
+            detail = MAPPER.readTree(body).path("error").path("message").asText("");
         } catch (Exception ignored) {}
-
-        String description = type.isEmpty() ? detail : (detail.isEmpty() ? type : type + ": " + detail);
-        return "HTTP_" + status + (description.isEmpty() ? "" : " — " + description);
+        return "HTTP_" + status + (detail.isEmpty() ? "" : " — " + detail);
     }
 
     private static String buildPronunciationPrompt(String transcript, String focusWord) {

@@ -19,6 +19,14 @@ import java.util.function.Consumer;
 /**
  * Streams PCM audio to Deepgram's real-time transcription API via WebSocket.
  *
+ * <h3>Auto-reconnection</h3>
+ * <p>If the WebSocket closes unexpectedly (network drop, server restart, etc.)
+ * while {@link #running} is still {@code true}, the provider automatically
+ * re-establishes the connection with exponential back-off (1 s → 2 s → … → 30 s).
+ * The send loop pauses during reconnection so no stale chunks are forwarded.
+ * Queued audio accumulated during the outage is discarded on reconnect to avoid
+ * sending out-of-date audio to the fresh session.
+ *
  * <h3>Threading model</h3>
  * <p>A dedicated sender virtual thread drains an internal queue and forwards
  * binary frames to the WebSocket. This decouples the audio capture thread from
@@ -26,12 +34,6 @@ import java.util.function.Consumer;
  * WebSocket API throws when a second {@code sendBinary()} is called before the
  * first completes. The queue holds up to 64 chunks (~6.4 s); older chunks are
  * dropped with a warning if the network can't keep up.
- *
- * <h3>Deepgram parameters</h3>
- * <p>Uses {@code nova-2-general} with {@code punctuate=true},
- * {@code interim_results=true}, and {@code smart_format=true}. The sample rate
- * and channel count are derived from the {@link AudioFormat} passed to
- * {@link #start}.
  */
 public class DeepgramStreamingProvider implements SpeechToTextProvider {
 
@@ -43,15 +45,26 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
     private final String channelId;
 
     private HttpClient httpClient;
-    private WebSocket webSocket;
+    private volatile WebSocket webSocket;
     private Consumer<TranscriptEvent> onResult;
+    // Optional UI callbacks — called from reconnect virtual threads; must be thread-safe
+    private Runnable onDisconnected;
+    private Runnable onReconnected;
     private Thread senderThread;
+    private String lastUrl;
     private final LinkedBlockingQueue<byte[]> sendQueue = new LinkedBlockingQueue<>(64);
-    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean running     = new AtomicBoolean(false);
+    private final AtomicBoolean reconnecting = new AtomicBoolean(false);
 
     public DeepgramStreamingProvider(String apiKey, String channelId) {
-        this.apiKey = apiKey;
-        this.channelId = channelId;
+        this.apiKey     = apiKey;
+        this.channelId  = channelId;
+    }
+
+    /** Optional: wire UI callbacks so the status dot reflects connection state. */
+    public void setConnectionCallbacks(Runnable onDisconnected, Runnable onReconnected) {
+        this.onDisconnected = onDisconnected;
+        this.onReconnected  = onReconnected;
     }
 
     @Override
@@ -60,14 +73,14 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
             throw new IllegalStateException("DeepgramStreamingProvider already started");
         }
         this.onResult = onResult;
+        this.lastUrl  = buildUrl(format);
 
-        String url = buildUrl(format);
-        log.info("Connecting to Deepgram (channel={}): {}", channelId, url);
+        log.info("Connecting to Deepgram (channel={}): {}", channelId, lastUrl);
 
         httpClient = HttpClient.newHttpClient();
-        webSocket = httpClient.newWebSocketBuilder()
+        webSocket  = httpClient.newWebSocketBuilder()
                 .header("Authorization", "Token " + apiKey)
-                .buildAsync(URI.create(url), new DeepgramListener())
+                .buildAsync(URI.create(lastUrl), new DeepgramListener())
                 .get(10, TimeUnit.SECONDS);
 
         senderThread = Thread.ofVirtual()
@@ -79,7 +92,7 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
 
     @Override
     public void sendAudioChunk(byte[] pcmData) {
-        if (!running.get()) return;
+        if (!running.get() || reconnecting.get()) return;
         if (!sendQueue.offer(pcmData)) {
             log.warn("Deepgram send queue full — dropping chunk (channel={})", channelId);
         }
@@ -92,25 +105,16 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
         // Wake the sender thread so it exits its poll loop
         if (senderThread != null) {
             senderThread.interrupt();
-            try {
-                senderThread.join(3_000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            try { senderThread.join(3_000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
 
         try {
             if (webSocket != null) {
-                webSocket.sendText("{\"type\":\"CloseStream\"}", true)
-                         .get(3, TimeUnit.SECONDS);
-                webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "session ended")
-                         .get(3, TimeUnit.SECONDS);
+                webSocket.sendText("{\"type\":\"CloseStream\"}", true).get(3, TimeUnit.SECONDS);
+                webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "session ended").get(3, TimeUnit.SECONDS);
             }
         } catch (Exception e) {
-            // Avoid logging raw exception messages that may contain HTTP response
-            // headers or auth context from the WebSocket handshake.
-            log.warn("Error closing Deepgram WebSocket (channel={}): {}", channelId,
-                    e.getClass().getSimpleName());
+            log.warn("Error closing Deepgram WebSocket (channel={}): {}", channelId, e.getClass().getSimpleName());
         } finally {
             if (httpClient != null) httpClient.close();
         }
@@ -118,28 +122,76 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
         log.info("Deepgram provider stopped (channel={})", channelId);
     }
 
-    // ---- sender loop (virtual thread) ------------------------------------
+    // ── Sender loop (virtual thread) ──────────────────────────────────────
 
     private void sendLoop() {
         while (running.get()) {
             try {
+                if (reconnecting.get()) {
+                    Thread.sleep(100);
+                    continue;
+                }
                 byte[] chunk = sendQueue.poll(200, TimeUnit.MILLISECONDS);
                 if (chunk == null) continue;
-                // join() parks this virtual thread until the send completes —
-                // safe and correct because virtual threads are cheap to park.
                 webSocket.sendBinary(ByteBuffer.wrap(chunk), true).join();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                if (running.get()) {
-                    log.error("Deepgram send error (channel={})", channelId, e);
+                if (running.get() && !reconnecting.get()) {
+                    log.error("Deepgram send error (channel={}): {}", channelId, e.getMessage());
                 }
             }
         }
     }
 
-    // ---- WebSocket listener ----------------------------------------------
+    // ── Auto-reconnection ─────────────────────────────────────────────────
+
+    private void triggerReconnect() {
+        if (!running.get()) return;
+        if (!reconnecting.compareAndSet(false, true)) return; // already in progress
+
+        log.warn("Deepgram connection lost (channel={}) — starting reconnect…", channelId);
+        if (onDisconnected != null) onDisconnected.run();
+        scheduleReconnect(1_000);
+    }
+
+    private void scheduleReconnect(int delayMs) {
+        Thread.ofVirtual().name("deepgram-reconnect-" + channelId).start(() -> {
+            try {
+                Thread.sleep(delayMs);
+                if (!running.get()) { reconnecting.set(false); return; }
+
+                log.info("Reconnect attempt (channel={}, delay was {}ms)…", channelId, delayMs);
+                WebSocket newWs = httpClient.newWebSocketBuilder()
+                        .header("Authorization", "Token " + apiKey)
+                        .buildAsync(URI.create(lastUrl), new DeepgramListener())
+                        .get(10, TimeUnit.SECONDS);
+
+                if (!running.get()) {
+                    newWs.sendClose(WebSocket.NORMAL_CLOSURE, "stopping").join();
+                    reconnecting.set(false);
+                    return;
+                }
+
+                webSocket = newWs;
+                sendQueue.clear(); // discard audio accumulated during the outage
+                reconnecting.set(false);
+                log.info("Reconnected to Deepgram (channel={})", channelId);
+                if (onReconnected != null) onReconnected.run();
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                reconnecting.set(false);
+            } catch (Exception e) {
+                int next = Math.min(delayMs * 2, 30_000);
+                log.warn("Reconnect failed (channel={}) — retry in {}ms: {}", channelId, next, e.getMessage());
+                scheduleReconnect(next);
+            }
+        });
+    }
+
+    // ── WebSocket listener ────────────────────────────────────────────────
 
     private class DeepgramListener implements WebSocket.Listener {
 
@@ -166,16 +218,21 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
         public CompletionStage<?> onClose(WebSocket ws, int statusCode, String reason) {
             log.info("Deepgram WebSocket closed: status={} reason='{}' (channel={})",
                     statusCode, reason, channelId);
+            // NORMAL_CLOSURE is sent by our own stop() — don't reconnect in that case
+            if (running.get() && statusCode != WebSocket.NORMAL_CLOSURE) {
+                triggerReconnect();
+            }
             return null;
         }
 
         @Override
         public void onError(WebSocket ws, Throwable error) {
-            log.error("Deepgram WebSocket error (channel={})", channelId, error);
+            log.error("Deepgram WebSocket error (channel={}): {}", channelId, error.getMessage());
+            triggerReconnect();
         }
     }
 
-    // ---- JSON parsing ----------------------------------------------------
+    // ── JSON parsing ──────────────────────────────────────────────────────
 
     private void handleMessage(String json) {
         try {
@@ -193,8 +250,8 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
             String text = alternatives.get(0).path("transcript").asText("").trim();
             if (text.isEmpty()) return;
 
-            boolean isFinal = root.path("is_final").asBoolean(false);
-            double confidence = alternatives.get(0).path("confidence").asDouble(-1);
+            boolean isFinal    = root.path("is_final").asBoolean(false);
+            double  confidence = alternatives.get(0).path("confidence").asDouble(-1);
 
             onResult.accept(new TranscriptEvent(text, isFinal, confidence, channelId));
 
@@ -203,7 +260,7 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
         }
     }
 
-    // ---- helpers ---------------------------------------------------------
+    // ── Helpers ───────────────────────────────────────────────────────────
 
     private static String buildUrl(AudioFormat fmt) {
         return WS_BASE
@@ -211,7 +268,7 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
                 + "&language=en"
                 + "&encoding=linear16"
                 + "&sample_rate=" + (int) fmt.getSampleRate()
-                + "&channels=" + fmt.getChannels()
+                + "&channels="    + fmt.getChannels()
                 + "&punctuate=true"
                 + "&interim_results=true"
                 + "&smart_format=true";

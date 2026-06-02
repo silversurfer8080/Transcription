@@ -6,7 +6,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
-import org.example.llm.AnthropicClient;
+import org.example.llm.GroqClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,9 +31,9 @@ public class EvaluationTab {
     public Node buildContent() {
         // ── Row 1: API key ───────────────────────────────────────────────
         apiKeyField = new PasswordField();
-        apiKeyField.setPromptText("Anthropic API key");
+        apiKeyField.setPromptText("Groq API key  (gsk_...)");
         HBox.setHgrow(apiKeyField, Priority.ALWAYS);
-        String envKey = System.getenv("ANTHROPIC_API_KEY");
+        String envKey = System.getenv("GROQ_API_KEY");
         if (envKey != null && !envKey.isBlank()) apiKeyField.setText(envKey);
 
         HBox row1 = new HBox(8, new Label("API Key:"), apiKeyField);
@@ -95,14 +95,14 @@ public class EvaluationTab {
 
         Thread.ofVirtual().name("answer-evaluate").start(() -> {
             try {
-                String result = AnthropicClient.evaluateAnswer(apiKey, question, expected, candidate);
+                String result = GroqClient.evaluateAnswer(apiKey, question, expected, candidate);
                 Platform.runLater(() -> {
                     resultArea.setText(result);
                     resetBtn();
                 });
             } catch (Exception ex) {
                 log.error("Answer evaluation failed", ex);
-                String detail = ex.getMessage() != null ? sanitizeError(ex.getMessage()) : ex.getClass().getSimpleName();
+                String detail = translateError(ex.getMessage());
                 Platform.runLater(() -> {
                     resultArea.setText("Erro: " + detail);
                     resetBtn();
@@ -116,8 +116,13 @@ public class EvaluationTab {
         evaluateBtn.setText("Avaliar Resposta");
     }
 
-    private static String sanitizeError(String msg) {
-        return msg.replaceAll("(?i)(token|key|auth(orization)?)[^\\s]*\\s*[=:]?\\s*\\S+", "[REDACTED]");
+    private static String translateError(String msg) {
+        if (msg == null) return "Erro desconhecido";
+        if (msg.contains("HTTP_401")) return "API key Groq inválida ou expirada. Verifique a chave e tente novamente.";
+        if (msg.contains("HTTP_403")) return "Acesso negado (403). Verifique as permissões da API key.";
+        if (msg.contains("HTTP_429")) return "Limite de requisições atingido. Aguarde alguns segundos e tente novamente.";
+        if (msg.contains("HTTP_5"))   return "Erro interno do servidor Anthropic. Tente novamente em instantes.";
+        return msg;
     }
 
     private static TextArea inputArea(int rows, String prompt) {
