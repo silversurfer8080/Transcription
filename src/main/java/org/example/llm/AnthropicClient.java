@@ -58,7 +58,7 @@ public class AnthropicClient {
     }
 
     // Parses the Anthropic error body to produce a clean, key-safe message.
-    private static String buildErrorMessage(int status, String body) {
+    static String buildErrorMessage(int status, String body) {
         String type = "";
         String detail = "";
         try {
@@ -71,7 +71,7 @@ public class AnthropicClient {
         return "HTTP_" + status + (description.isEmpty() ? "" : " — " + description);
     }
 
-    private static String buildPronunciationPrompt(String transcript, String focusWord) {
+    static String buildPronunciationPrompt(String transcript, String focusWord) {
         StringBuilder sb = new StringBuilder();
         sb.append("Você é um coach de pronúncia em inglês para entrevistadores técnicos brasileiros.\n\n");
         sb.append("Transcrição do que foi dito:\n\"").append(transcript).append("\"\n\n");
@@ -89,7 +89,7 @@ public class AnthropicClient {
         return sb.toString();
     }
 
-    private static String buildEvaluationPrompt(String question, String expectedAnswer,
+    static String buildEvaluationPrompt(String question, String expectedAnswer,
                                                  String candidateAnswer) {
         return """
                 Você é um avaliador técnico experiente em entrevistas de tecnologia.

@@ -56,7 +56,7 @@ public class GroqClient {
         }
     }
 
-    private static String buildErrorMessage(int status, String body) {
+    static String buildErrorMessage(int status, String body) {
         String detail = "";
         try {
             detail = MAPPER.readTree(body).path("error").path("message").asText("");
@@ -64,7 +64,7 @@ public class GroqClient {
         return "HTTP_" + status + (detail.isEmpty() ? "" : " — " + detail);
     }
 
-    private static String buildPronunciationPrompt(String transcript, String focusWord) {
+    static String buildPronunciationPrompt(String transcript, String focusWord) {
         StringBuilder sb = new StringBuilder();
         sb.append("Você é um coach de pronúncia em inglês para entrevistadores técnicos brasileiros.\n\n");
         sb.append("Transcrição do que foi dito:\n\"").append(transcript).append("\"\n\n");
@@ -82,7 +82,7 @@ public class GroqClient {
         return sb.toString();
     }
 
-    private static String buildEvaluationPrompt(String question, String expectedAnswer,
+    static String buildEvaluationPrompt(String question, String expectedAnswer,
                                                  String candidateAnswer) {
         return """
                 Você é um avaliador técnico experiente em entrevistas de tecnologia.

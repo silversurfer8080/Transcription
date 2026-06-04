@@ -244,25 +244,28 @@ public class DeepgramStreamingProvider implements SpeechToTextProvider {
                 return;
             }
 
-            JsonNode alternatives = root.path("channel").path("alternatives");
-            if (alternatives.isEmpty()) return;
-
-            String text = alternatives.get(0).path("transcript").asText("").trim();
-            if (text.isEmpty()) return;
-
-            boolean isFinal    = root.path("is_final").asBoolean(false);
-            double  confidence = alternatives.get(0).path("confidence").asDouble(-1);
-
-            onResult.accept(new TranscriptEvent(text, isFinal, confidence, channelId));
+            TranscriptEvent event = extractTranscriptEvent(root, channelId);
+            if (event != null) onResult.accept(event);
 
         } catch (Exception e) {
             log.error("Failed to parse Deepgram message", e);
         }
     }
 
+    /** Parses a Deepgram Results message into a TranscriptEvent. Package-private for testing. */
+    static TranscriptEvent extractTranscriptEvent(JsonNode root, String channelId) {
+        JsonNode alternatives = root.path("channel").path("alternatives");
+        if (alternatives.isEmpty()) return null;
+        String text = alternatives.get(0).path("transcript").asText("").trim();
+        if (text.isEmpty()) return null;
+        boolean isFinal    = root.path("is_final").asBoolean(false);
+        double  confidence = alternatives.get(0).path("confidence").asDouble(-1);
+        return new TranscriptEvent(text, isFinal, confidence, channelId);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
-    private static String buildUrl(AudioFormat fmt) {
+    static String buildUrl(AudioFormat fmt) {
         return WS_BASE
                 + "?model=nova-2-general"
                 + "&language=en"
