@@ -7,7 +7,6 @@ import javafx.beans.binding.Bindings;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.collections.FXCollections;
-import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
@@ -30,7 +29,6 @@ import org.example.Main;
 import org.example.audio.AudioCapture;
 import org.example.audio.AudioDeviceInfo;
 import org.example.audio.AudioDevices;
-import org.example.audio.WavFileWriter;
 import org.example.llm.GroqClient;
 import org.example.stt.DeepgramStreamingProvider;
 import org.example.stt.TranscriptEvent;
@@ -50,14 +48,9 @@ import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Main application window — three tabs:
- * <ol>
- *   <li><b>Interview</b> — dual-channel capture, per-question panels, WAV saving.</li>
- *   <li><b>Pronunciação</b> — select a recorded question and get a pronunciation
- *       critique from Claude.</li>
- *   <li><b>Avaliação</b> — paste question, expected answer, and candidate transcript
- *       to generate a structured evaluation via Claude.</li>
- * </ol>
+ * Main application window — a single Interview tab: candidate-channel capture
+ * and per-question panels (QUESTION / EXPECTED ANSWER / CANDIDATE ANSWER) with
+ * an inline Groq evaluation and star rating.
  */
 public class InterviewApp extends Application {
 
@@ -69,9 +62,7 @@ public class InterviewApp extends Application {
     private static final String FORM_FONT_STYLE = "-fx-font-size: 15px;";
 
     // ---- session state (FX thread only, except activeQuestion which is volatile) ----
-    private AudioCapture micCapture;
     private AudioCapture candidateCapture;
-    private DeepgramStreamingProvider micProvider;
     private DeepgramStreamingProvider candidateProvider;
     private boolean sessionRunning = false;
     private int questionCounter = 0;
@@ -82,9 +73,6 @@ public class InterviewApp extends Application {
     private volatile QuestionPanel activeQuestion = null;
     private final List<QuestionPanel> questionPanels = new ArrayList<>();
     private Stage primaryStage;
-
-    // Shared with PronunciationTab via ObservableList — the combo box updates automatically
-    private final ObservableList<QuestionRef> sessionQuestions = FXCollections.observableArrayList();
 
     // Global font size for all transcript TextAreas — bound via styleProperty
     private final IntegerProperty fontSize = new SimpleIntegerProperty(14);
@@ -97,7 +85,6 @@ public class InterviewApp extends Application {
     private TextField jobField;
     private ComboBox<String> sexCombo;   // Male/Female → he/him or she/her in the AI prompt
     private ComboBox<String> scaleCombo; // 5 or 10 → star-rating scale for the AI analysis
-    private ComboBox<AudioDeviceInfo> micCombo;
     private ComboBox<AudioDeviceInfo> candidateCombo;
     private Button sessionBtn;
     private Circle statusDot;
@@ -115,16 +102,8 @@ public class InterviewApp extends Application {
             if (is != null) stage.getIcons().add(new Image(is));
         } catch (Exception ignored) {}
 
-        TabPane tabPane = new TabPane();
-        tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-
-        Tab interviewTab     = new Tab("Interview",    buildInterviewTabContent());
-        Tab pronunciationTab = new Tab("Pronunciação", new PronunciationTab(sessionQuestions).buildContent());
-        Tab evaluationTab    = new Tab("Avaliação",    new EvaluationTab().buildContent());
-
-        tabPane.getTabs().addAll(interviewTab, pronunciationTab, evaluationTab);
-
-        stage.setScene(new Scene(tabPane, 820, 700));
+        Region root = (Region) buildInterviewTabContent();
+        stage.setScene(new Scene(root, 820, 700));
         stage.setAlwaysOnTop(false);
         stage.setOnCloseRequest(e -> onWindowClose());
         stage.show();
@@ -159,21 +138,22 @@ public class InterviewApp extends Application {
                 powerBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
 
-        // ── Row 2: name + job + company + sex ────────────────────────────────
+        // ── Row 2: name + job + company + sex + stars ────────────────────────
+        // Compact fixed widths so Sex and Stars fit comfortably on the same row.
         candidateField = new TextField();
         candidateField.setPromptText("Candidate name");
         candidateField.setStyle(FORM_FONT_STYLE);
-        HBox.setHgrow(candidateField, Priority.ALWAYS);
+        candidateField.setPrefWidth(180);
 
         jobField = new TextField();
         jobField.setPromptText("Job / role");
         jobField.setStyle(FORM_FONT_STYLE);
-        HBox.setHgrow(jobField, Priority.ALWAYS);
+        jobField.setPrefWidth(150);
 
         companyField   = new TextField();
         companyField.setPromptText("Company");
         companyField.setStyle(FORM_FONT_STYLE);
-        HBox.setHgrow(companyField, Priority.ALWAYS);
+        companyField.setPrefWidth(150);
 
         sexCombo = new ComboBox<>(FXCollections.observableArrayList("Male", "Female"));
         sexCombo.setPromptText("Sex");
@@ -191,14 +171,12 @@ public class InterviewApp extends Application {
                 formLabel("Stars:"), scaleCombo);
         row2.setAlignment(Pos.CENTER_LEFT);
 
-        // ── Row 3: device selectors + session button ─────────────────────────
+        // ── Row 3: candidate device + session button ─────────────────────────
         List<AudioDeviceInfo> devices = AudioDevices.listCaptureDevices();
 
-        micCombo = buildDeviceCombo(devices);
         candidateCombo = buildDeviceCombo(devices);
 
-        // Pre-select known devices: Realtek for mic, VB-Audio Cable for candidate
-        autoSelectByKeyword(micCombo, devices, "realtek");
+        // Pre-select the VB-Audio Cable for the candidate channel
         autoSelectByKeyword(candidateCombo, devices, "cable output");
 
         statusDot = new Circle(7, Color.LIGHTGRAY);
@@ -210,7 +188,6 @@ public class InterviewApp extends Application {
         sessionBtn.setOnAction(e -> onSessionToggle());
 
         HBox row3 = new HBox(8,
-                formLabel("Mic:"), micCombo,
                 formLabel("Candidate:"), candidateCombo,
                 sessionBtn, statusDot);
         row3.setAlignment(Pos.CENTER_LEFT);
@@ -272,16 +249,8 @@ public class InterviewApp extends Application {
             return;
         }
 
-        AudioDeviceInfo micDev  = micCombo.getValue();
         AudioDeviceInfo candDev = candidateCombo.getValue();
-        if (micDev == null || candDev == null) { showAlert("Sem dispositivo", "Selecione os dois dispositivos."); return; }
-        if (micDev.mixerInfo().getName().equals(candDev.mixerInfo().getName())) {
-            showAlert("Mesmo dispositivo",
-                    "Mic e Candidate estão no mesmo dispositivo.\n\n" +
-                    "Selecione o VB-Audio Virtual Cable (ou outro cabo virtual) " +
-                    "para o canal Candidate.");
-            return;
-        }
+        if (candDev == null) { showAlert("Sem dispositivo", "Selecione o dispositivo do candidato."); return; }
 
         try {
             sessionTxtPath = openSessionTxt(company, candidate);
@@ -295,7 +264,6 @@ public class InterviewApp extends Application {
         questionsBox.getChildren().clear();
         questionPanels.clear();
         questionCounter = 0;
-        sessionQuestions.clear();
         setSessionControlsEnabled(false);
         sessionBtn.setText("Connecting…");
         statusDot.setFill(Color.YELLOW);
@@ -304,8 +272,7 @@ public class InterviewApp extends Application {
 
         Thread.ofVirtual().name("start-session").start(() -> {
             try {
-                // Mic transcription is disabled for now — only the candidate channel
-                // is streamed to Deepgram. The mic is still captured to WAV.
+                // Only the candidate channel is captured and streamed to Deepgram.
                 DeepgramStreamingProvider cProv = new DeepgramStreamingProvider(apiKey, "candidate");
 
                 cProv.setConnectionCallbacks(
@@ -316,20 +283,14 @@ public class InterviewApp extends Application {
 
                 cProv.start(Main.DEFAULT_FORMAT, this::onCandidateEvent);
 
-                AudioCapture mCap = new AudioCapture(micDev.mixerInfo(), Main.DEFAULT_FORMAT,
-                        chunk -> {
-                            QuestionPanel q = activeQuestion;
-                            if (q != null) q.writeAudio(chunk);
-                        });
                 AudioCapture cCap = new AudioCapture(candDev.mixerInfo(), Main.DEFAULT_FORMAT,
                         cProv::sendAudioChunk);
 
-                mCap.start();
                 cCap.start();
 
                 Platform.runLater(() -> {
-                    candidateProvider = cProv;   // micProvider stays null (transcription off)
-                    micCapture  = mCap;    candidateCapture  = cCap;
+                    candidateProvider = cProv;
+                    candidateCapture  = cCap;
                     sessionRunning = true;
                     sessionBtn.setText("⏹  Stop Session");
                     sessionBtn.setDisable(false);
@@ -337,8 +298,7 @@ public class InterviewApp extends Application {
                     newQuestionBtn.setDisable(false);
                     // Re-enable Continue on any already-stopped panels from a previous round
                     questionPanels.forEach(p -> { if (!p.active.get()) p.setContinueEnabled(true); });
-                    log.info("Session started — mic='{}' candidate='{}'",
-                            micDev.name(), candDev.name());
+                    log.info("Session started — candidate='{}'", candDev.name());
                 });
 
             } catch (Exception ex) {
@@ -367,14 +327,12 @@ public class InterviewApp extends Application {
         // Disable Continue buttons while no session is running
         questionPanels.forEach(p -> p.setContinueEnabled(false));
 
-        AudioCapture mCap = micCapture;       AudioCapture cCap = candidateCapture;
-        DeepgramStreamingProvider mProv = micProvider; DeepgramStreamingProvider cProv = candidateProvider;
-        micCapture = null; candidateCapture = null; micProvider = null; candidateProvider = null;
+        AudioCapture cCap = candidateCapture;
+        DeepgramStreamingProvider cProv = candidateProvider;
+        candidateCapture = null; candidateProvider = null;
 
         Thread.ofVirtual().name("stop-session").start(() -> {
-            if (mCap  != null) mCap.stop();
             if (cCap  != null) cCap.stop();
-            if (mProv != null) mProv.stop();
             if (cProv != null) cProv.stop();
             Platform.runLater(() -> {
                 setSessionControlsEnabled(true);
@@ -412,13 +370,6 @@ public class InterviewApp extends Application {
         questionPanels.add(panel);
         questionsBox.getChildren().add(panel.titledPane);
 
-        // Register with the shared list so PronunciationTab's dropdown updates.
-        // The question text now comes from the (manually filled) QUESTION column.
-        sessionQuestions.add(new QuestionRef(
-                questionCounter,
-                panel.wavPath,
-                () -> panel.questionArea.getText().trim()));
-
         persistSessionTxt();
         saveSessionBtn.setDisable(false);
         Platform.runLater(() -> questionsScroll.setVvalue(1.0));
@@ -449,7 +400,6 @@ public class InterviewApp extends Application {
         }
         closeSessionTxt();
         questionsBox.getChildren().clear();
-        sessionQuestions.clear();
         questionPanels.clear();
         questionCounter = 0;
         saveSessionBtn.setDisable(true);
@@ -505,14 +455,12 @@ public class InterviewApp extends Application {
         // Create one read-only panel per section
         for (LoadedQuestion lq : sections) {
             questionCounter++;
-            QuestionPanel panel = new QuestionPanel(questionCounter, true);
+            QuestionPanel panel = new QuestionPanel(questionCounter);
             panel.setInitialQuestion(lq.question());
             panel.setInitialAnswer(lq.answer());
             panel.markStopped();
             questionPanels.add(panel);
             questionsBox.getChildren().add(panel.titledPane);
-            sessionQuestions.add(new QuestionRef(
-                    questionCounter, null, () -> panel.questionArea.getText().trim()));
         }
 
         saveSessionBtn.setDisable(false);
@@ -659,7 +607,6 @@ public class InterviewApp extends Application {
         candidateField.setDisable(!enabled);
         jobField.setDisable(!enabled);
         sexCombo.setDisable(!enabled);
-        micCombo.setDisable(!enabled);
         candidateCombo.setDisable(!enabled);
         sessionBtn.setDisable(!enabled);
     }
@@ -782,9 +729,6 @@ public class InterviewApp extends Application {
         final int number;
         final AtomicBoolean active = new AtomicBoolean(true);
 
-        Path wavPath;           // set by initWavWriter(); exposed to QuestionRef
-        WavFileWriter wavWriter;
-
         // UI (FX thread only)
         TitledPane titledPane;
         private TextArea questionArea;
@@ -798,13 +742,8 @@ public class InterviewApp extends Application {
         private Button   continueBtn;
 
         QuestionPanel(int number) {
-            this(number, false);
-        }
-
-        QuestionPanel(int number, boolean loadMode) {
             this.number = number;
             buildUI();
-            if (!loadMode) initWavWriter();
         }
 
         void setInitialAnswer(String text) {
@@ -919,49 +858,6 @@ public class InterviewApp extends Application {
             return ta;
         }
 
-        // ── WAV file ────────────────────────────────────────────────────
-
-        private void initWavWriter() {
-            try {
-                String dateDir = LocalDate.now().format(DATE_FOLDER_FMT);
-                Path dir = Path.of(System.getProperty("user.home"), "Desktop", "Flocareer", "wav", dateDir);
-                Files.createDirectories(dir);
-                wavPath = dir.resolve("Q" + number + ".wav");
-                wavWriter = new WavFileWriter(wavPath, Main.DEFAULT_FORMAT);
-                log.info("WAV writer opened: {}", wavPath);
-            } catch (IOException e) {
-                log.error("Failed to open WAV for question {}", number, e);
-            }
-        }
-
-        private void initWavWriterContinuation() {
-            try {
-                String dateDir = LocalDate.now().format(DATE_FOLDER_FMT);
-                Path dir = Path.of(System.getProperty("user.home"), "Desktop", "Flocareer", "wav", dateDir);
-                Files.createDirectories(dir);
-                Path newPath = dir.resolve("Q" + number + "_cont.wav");
-                int i = 2;
-                while (Files.exists(newPath)) {
-                    newPath = dir.resolve("Q" + number + "_cont" + i + ".wav");
-                    i++;
-                }
-                wavWriter = new WavFileWriter(newPath, Main.DEFAULT_FORMAT);
-                log.info("WAV writer reopened (continuation): {}", newPath);
-            } catch (IOException e) {
-                log.error("Failed to reopen WAV for question {} continuation", number, e);
-            }
-        }
-
-        /** Called from the audio capture virtual thread — thread-safe via WavFileWriter sync. */
-        void writeAudio(byte[] pcm) {
-            if (!active.get() || wavWriter == null) return;
-            try {
-                wavWriter.write(pcm);
-            } catch (IOException e) {
-                log.error("WAV write error (question {})", number, e);
-            }
-        }
-
         // ── Transcript events (arrive on WebSocket thread) ───────────────
 
         void onCandidateEvent(TranscriptEvent event) {
@@ -997,11 +893,6 @@ public class InterviewApp extends Application {
 
         void markStopped() {
             if (!active.compareAndSet(true, false)) return;
-            try {
-                if (wavWriter != null) wavWriter.close();
-            } catch (IOException e) {
-                log.error("Failed to close WAV for question {}", number, e);
-            }
             Platform.runLater(() -> {
                 stopBtn.setDisable(true);
                 continueBtn.setDisable(!sessionRunning);
@@ -1018,7 +909,6 @@ public class InterviewApp extends Application {
             if (current != null && current != this) current.markStopped();
 
             active.set(true);
-            initWavWriterContinuation();
             activeQuestion = this;
 
             Platform.runLater(() -> {
@@ -1060,8 +950,8 @@ public class InterviewApp extends Application {
 
             if (key.isEmpty())       { showAlert("Groq API Key ausente", "Informe a Groq API key no campo \"Groq\" no topo."); return; }
             if (question.isEmpty())  { showAlert("Pergunta vazia",  "Preencha ou cole a pergunta na coluna QUESTION."); return; }
-            if (expected.isEmpty())  { showAlert("Gabarito vazio",  "Cole a resposta esperada na coluna EXPECTED ANSWER."); return; }
             if (candidate.isEmpty()) { showAlert("Sem resposta",    "A coluna CANDIDATE ANSWER está vazia."); return; }
+            // EXPECTED ANSWER is optional — when empty, the AI judges using its own expertise.
 
             analyzeBtn.setDisable(true);
             analyzeBtn.setText("Analisando…");

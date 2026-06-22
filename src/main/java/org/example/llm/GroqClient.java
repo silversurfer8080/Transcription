@@ -18,11 +18,6 @@ public class GroqClient {
 
     private GroqClient() {}
 
-    public static String analyzePronunciation(String apiKey, String transcript, String focusWord)
-            throws Exception {
-        return call(apiKey, buildPronunciationPrompt(transcript, focusWord));
-    }
-
     public static String evaluateAnswer(String apiKey, String question,
                                         String expectedAnswer, String candidateAnswer,
                                         String candidateName, String gender, int starScale)
@@ -66,24 +61,6 @@ public class GroqClient {
         return "HTTP_" + status + (detail.isEmpty() ? "" : " — " + detail);
     }
 
-    static String buildPronunciationPrompt(String transcript, String focusWord) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Você é um coach de pronúncia em inglês para entrevistadores técnicos brasileiros.\n\n");
-        sb.append("Transcrição do que foi dito:\n\"").append(transcript).append("\"\n\n");
-        if (focusWord != null && !focusWord.isBlank()) {
-            sb.append("Palavra/trecho específico para analisar: \"").append(focusWord).append("\"\n\n");
-        }
-        sb.append("""
-                Analise os pontos de pronúncia mais relevantes considerando erros comuns de \
-                falantes de português brasileiro. Para cada item:
-                1. Mostre a pronúncia correta em IPA
-                2. Descreva o erro típico de um brasileiro (ex: vogal extra, th/d, stress errado)
-                3. Dê uma dica prática para corrigir
-
-                Seja objetivo. Responda em português.""");
-        return sb.toString();
-    }
-
     static String buildEvaluationPrompt(String question, String expectedAnswer,
                                         String candidateAnswer, String candidateName,
                                         String gender, int starScale) {
@@ -98,6 +75,12 @@ public class GroqClient {
                 ? "Refer to the candidate using the pronouns " + pronouns + "."
                 : "The candidate's name is " + name + "; refer to them as " + name
                   + " and use " + pronouns + " pronouns.";
+
+        String expected = (expectedAnswer == null) ? "" : expectedAnswer.trim();
+        String expectedSection = expected.isEmpty()
+                ? "No model answer was provided. Judge the technical correctness and "
+                  + "completeness of the answer using your own expert knowledge of the question."
+                : "Expected answer (model answer / key points):\n" + expected;
 
         String scaleGuide = (max == 10)
                 ? "Rate the answer from 1 to 10 stars using these bands: "
@@ -115,7 +98,6 @@ public class GroqClient {
                 Question asked:
                 %s
 
-                Expected answer (model answer / key points):
                 %s
 
                 Candidate's answer (automatic speech-to-text transcription):
@@ -129,16 +111,15 @@ public class GroqClient {
 
                 Write your assessment as flowing prose in at most two paragraphs, with no bullet \
                 points and no section headings. Be objective and professional: clearly call out \
-                when the candidate missed important points from the expected answer or stayed too \
-                superficial, and do not inflate a weak answer. Assess technical accuracy and \
-                completeness against the expected key points, and acknowledge genuine strengths \
-                only when they exist.
+                when the candidate missed important points or stayed too superficial, and do not \
+                inflate a weak answer. Assess the technical accuracy and completeness of the \
+                answer, and acknowledge genuine strengths only when they exist.
 
                 %s
 
                 Keep the tone professional and direct — neither harsh nor overly kind. Respond in \
                 English. After the assessment, output the score on its own very last line in \
                 exactly this format, with no extra words: RATING: n/%d
-                """.formatted(whoLine, question, expectedAnswer, candidateAnswer, scaleGuide, max);
+                """.formatted(whoLine, question, expectedSection, candidateAnswer, scaleGuide, max);
     }
 }

@@ -42,45 +42,6 @@ class GroqClientTest {
         assertEquals("HTTP_400", GroqClient.buildErrorMessage(400, "{\"error\":{\"message\":null}}"));
     }
 
-    // ── buildPronunciationPrompt ──────────────────────────────────────────────
-
-    @Test
-    void buildPronunciationPrompt_withFocusWord_includesFocusWordSection() {
-        String prompt = GroqClient.buildPronunciationPrompt("He went to the store", "went");
-        assertTrue(prompt.contains("went"),
-                "Focus word must appear in the prompt");
-        assertTrue(prompt.contains("Palavra/trecho específico para analisar"),
-                "Focus word section header must be included when a focus word is provided");
-    }
-
-    @Test
-    void buildPronunciationPrompt_blankFocusWord_omitsFocusWordSection() {
-        String prompt = GroqClient.buildPronunciationPrompt("He went to the store", "   ");
-        assertFalse(prompt.contains("Palavra/trecho específico para analisar"),
-                "Blank focus word must suppress the focus word section");
-    }
-
-    @Test
-    void buildPronunciationPrompt_nullFocusWord_omitsFocusWordSection() {
-        String prompt = GroqClient.buildPronunciationPrompt("He went to the store", null);
-        assertFalse(prompt.contains("Palavra/trecho específico para analisar"),
-                "Null focus word must suppress the focus word section");
-    }
-
-    @Test
-    void buildPronunciationPrompt_embedsTranscript() {
-        String transcript = "The quick brown fox jumps over the lazy dog";
-        String prompt = GroqClient.buildPronunciationPrompt(transcript, null);
-        assertTrue(prompt.contains(transcript), "Transcript must appear verbatim in the prompt");
-    }
-
-    @Test
-    void buildPronunciationPrompt_isInPortuguese() {
-        String prompt = GroqClient.buildPronunciationPrompt("test", null);
-        assertTrue(prompt.contains("Responda em português"),
-                "Prompt must instruct the model to respond in Portuguese");
-    }
-
     // ── buildEvaluationPrompt ─────────────────────────────────────────────────
 
     @Test
@@ -138,6 +99,30 @@ class GroqClientTest {
     void buildEvaluationPrompt_nullGender_fallsBackToNeutralPronouns() {
         String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5);
         assertTrue(prompt.contains("they/them"), "Unspecified gender must use neutral pronouns");
+    }
+
+    @Test
+    void buildEvaluationPrompt_withExpectedAnswer_includesModelAnswerLabel() {
+        String prompt = GroqClient.buildEvaluationPrompt(
+                "Q", "Use a lock-free queue", "B", "", null, 5);
+        assertTrue(prompt.contains("Expected answer"), "Provided gabarito must be labelled");
+        assertTrue(prompt.contains("Use a lock-free queue"), "Provided gabarito must be embedded");
+    }
+
+    @Test
+    void buildEvaluationPrompt_emptyExpected_tellsModelToUseOwnKnowledge() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "", "B", "", null, 5);
+        assertTrue(prompt.contains("No model answer was provided"),
+                "Empty gabarito must fall back to the model's own expertise");
+        assertFalse(prompt.contains("Expected answer (model answer"),
+                "No expected-answer label when the gabarito is empty");
+    }
+
+    @Test
+    void buildEvaluationPrompt_nullExpected_tellsModelToUseOwnKnowledge() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", null, "B", "", null, 5);
+        assertTrue(prompt.contains("No model answer was provided"),
+                "Null gabarito must fall back to the model's own expertise");
     }
 
     // ── Star-rating scale ─────────────────────────────────────────────────────
