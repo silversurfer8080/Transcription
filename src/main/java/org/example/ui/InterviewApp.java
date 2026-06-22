@@ -62,6 +62,9 @@ public class InterviewApp extends Application {
     private static final Logger log = LoggerFactory.getLogger(InterviewApp.class);
     private static final DateTimeFormatter DATE_FOLDER_FMT = DateTimeFormatter.ofPattern("dd-MM-yyyy");
 
+    // Font size for the top form labels/fields — a couple px above the Modena default (13px)
+    private static final String FORM_FONT_STYLE = "-fx-font-size: 15px;";
+
     // ---- session state (FX thread only, except activeQuestion which is volatile) ----
     private AudioCapture micCapture;
     private AudioCapture candidateCapture;
@@ -125,6 +128,7 @@ public class InterviewApp extends Application {
         // ── Row 1: API key + power button ───────────────────────────────────
         apiKeyField = new PasswordField();
         apiKeyField.setPromptText("Deepgram API key");
+        apiKeyField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(apiKeyField, Priority.ALWAYS);
         String envKey = System.getenv("DEEPGRAM_API_KEY");
         if (envKey != null && !envKey.isBlank()) apiKeyField.setText(envKey);
@@ -136,26 +140,29 @@ public class InterviewApp extends Application {
                 "-fx-min-width: 34; -fx-min-height: 34; -fx-background-radius: 17;");
         powerBtn.setOnAction(e -> { if (sessionRunning) stopSession(); Platform.exit(); });
 
-        HBox row1 = new HBox(8, new Label("API Key:"), apiKeyField, powerBtn);
+        HBox row1 = new HBox(8, formLabel("API Key:"), apiKeyField, powerBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
 
         // ── Row 2: empresa + candidato + cargo ──────────────────────────────
         companyField   = new TextField();
         companyField.setPromptText("Nome da empresa");
+        companyField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(companyField, Priority.ALWAYS);
 
         candidateField = new TextField();
         candidateField.setPromptText("Nome do candidato");
+        candidateField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(candidateField, Priority.ALWAYS);
 
         jobField = new TextField();
         jobField.setPromptText("Cargo / Vaga");
+        jobField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(jobField, Priority.ALWAYS);
 
         HBox row2 = new HBox(8,
-                new Label("Empresa:"), companyField,
-                new Label("Candidato:"), candidateField,
-                new Label("Cargo:"), jobField);
+                formLabel("Empresa:"), companyField,
+                formLabel("Candidato:"), candidateField,
+                formLabel("Cargo:"), jobField);
         row2.setAlignment(Pos.CENTER_LEFT);
 
         // ── Row 3: device selectors + session button ─────────────────────────
@@ -177,8 +184,8 @@ public class InterviewApp extends Application {
         sessionBtn.setOnAction(e -> onSessionToggle());
 
         HBox row3 = new HBox(8,
-                new Label("Mic:"), micCombo,
-                new Label("Candidate:"), candidateCombo,
+                formLabel("Mic:"), micCombo,
+                formLabel("Candidate:"), candidateCombo,
                 sessionBtn, statusDot);
         row3.setAlignment(Pos.CENTER_LEFT);
 
@@ -563,9 +570,17 @@ public class InterviewApp extends Application {
         ComboBox<AudioDeviceInfo> combo = new ComboBox<>();
         combo.getItems().addAll(devices);
         combo.setMaxWidth(Double.MAX_VALUE);
+        combo.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(combo, Priority.ALWAYS);
         if (!devices.isEmpty()) combo.getSelectionModel().selectFirst();
         return combo;
+    }
+
+    // Builds a Label for the top form rows at the enlarged form font size.
+    private static Label formLabel(String text) {
+        Label l = new Label(text);
+        l.setStyle(FORM_FONT_STYLE);
+        return l;
     }
 
     private static void autoSelectByKeyword(ComboBox<AudioDeviceInfo> combo,
@@ -803,9 +818,20 @@ public class InterviewApp extends Application {
                     String existing  = answerArea.getText();
                     String separator = (existing.isEmpty() || existing.endsWith(" ")) ? "" : " ";
                     String updated   = existing + separator + event.text() + " ";
+                    boolean userEditing = answerArea.isFocused();
+                    int anchor = answerArea.getAnchor();
+                    int caret  = answerArea.getCaretPosition();
+                    double scrollTop = answerArea.getScrollTop();
                     answerArea.setText(updated);
-                    answerArea.positionCaret(updated.length());
-                    answerArea.setScrollTop(Double.MAX_VALUE);
+                    if (userEditing) {
+                        // Appended text only extends the tail, so the user's
+                        // caret/selection indices are still valid — restore them.
+                        answerArea.selectRange(anchor, caret);
+                        answerArea.setScrollTop(scrollTop);
+                    } else {
+                        answerArea.positionCaret(updated.length());
+                        answerArea.setScrollTop(Double.MAX_VALUE);
+                    }
                     partialLabel.setText("");
                     appendToSessionTxt(event.text());
                 } else {

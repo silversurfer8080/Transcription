@@ -21,6 +21,9 @@ public class EvaluationTab {
 
     private static final Logger log = LoggerFactory.getLogger(EvaluationTab.class);
 
+    // Font size for the top form labels/fields — a couple px above the Modena default (13px)
+    private static final String FORM_FONT_STYLE = "-fx-font-size: 15px;";
+
     private PasswordField apiKeyField;
     private TextArea questionArea;
     private TextArea expectedArea;
@@ -32,11 +35,12 @@ public class EvaluationTab {
         // ── Row 1: API key ───────────────────────────────────────────────
         apiKeyField = new PasswordField();
         apiKeyField.setPromptText("Groq API key  (gsk_...)");
+        apiKeyField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(apiKeyField, Priority.ALWAYS);
         String envKey = System.getenv("GROQ_API_KEY");
         if (envKey != null && !envKey.isBlank()) apiKeyField.setText(envKey);
 
-        HBox row1 = new HBox(8, new Label("API Key:"), apiKeyField);
+        HBox row1 = new HBox(8, formLabel("API Key:"), apiKeyField);
         row1.setAlignment(Pos.CENTER_LEFT);
 
         // ── Input areas ──────────────────────────────────────────────────
@@ -137,6 +141,13 @@ public class EvaluationTab {
     private static Label sectionLabel(String text) {
         Label l = new Label(text);
         l.setStyle("-fx-font-weight: bold; -fx-font-size: 11px; -fx-text-fill: #666;");
+        return l;
+    }
+
+    // Builds a Label for the top form rows at the enlarged form font size.
+    private static Label formLabel(String text) {
+        Label l = new Label(text);
+        l.setStyle(FORM_FONT_STYLE);
         return l;
     }
 
