@@ -31,12 +31,12 @@ import org.example.audio.AudioCapture;
 import org.example.audio.AudioDeviceInfo;
 import org.example.audio.AudioDevices;
 import org.example.audio.WavFileWriter;
+import org.example.llm.GroqClient;
 import org.example.stt.DeepgramStreamingProvider;
 import org.example.stt.TranscriptEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -45,6 +45,8 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -60,7 +62,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class InterviewApp extends Application {
 
     private static final Logger log = LoggerFactory.getLogger(InterviewApp.class);
-    private static final DateTimeFormatter DATE_FOLDER_FMT = DateTimeFormatter.ofPattern("dd-MM-yyyy");
+    // Nested yyyy/MM/dd so date folders sort chronologically (year > month > day).
+    private static final DateTimeFormatter DATE_FOLDER_FMT = DateTimeFormatter.ofPattern("yyyy/MM/dd");
 
     // Font size for the top form labels/fields — a couple px above the Modena default (13px)
     private static final String FORM_FONT_STYLE = "-fx-font-size: 15px;";
@@ -72,7 +75,7 @@ public class InterviewApp extends Application {
     private DeepgramStreamingProvider candidateProvider;
     private boolean sessionRunning = false;
     private int questionCounter = 0;
-    private BufferedWriter sessionTxtWriter;
+    private Path sessionTxtPath;   // rewritten in full on each candidate final / stop
     // Counts how many providers are currently reconnecting; drives the status dot colour
     private final java.util.concurrent.atomic.AtomicInteger reconnectingProviders =
             new java.util.concurrent.atomic.AtomicInteger(0);
@@ -88,9 +91,12 @@ public class InterviewApp extends Application {
 
     // ---- UI controls (interview tab) ----
     private PasswordField apiKeyField;
+    private PasswordField groqKeyField;   // for per-question AI evaluation (Groq)
     private TextField companyField;
     private TextField candidateField;
     private TextField jobField;
+    private ComboBox<String> sexCombo;   // Male/Female → he/him or she/her in the AI prompt
+    private ComboBox<String> scaleCombo; // 5 or 10 → star-rating scale for the AI analysis
     private ComboBox<AudioDeviceInfo> micCombo;
     private ComboBox<AudioDeviceInfo> candidateCombo;
     private Button sessionBtn;
@@ -125,13 +131,20 @@ public class InterviewApp extends Application {
     }
 
     private Node buildInterviewTabContent() {
-        // ── Row 1: API key + power button ───────────────────────────────────
+        // ── Row 1: API keys + power button ──────────────────────────────────
         apiKeyField = new PasswordField();
         apiKeyField.setPromptText("Deepgram API key");
         apiKeyField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(apiKeyField, Priority.ALWAYS);
         String envKey = System.getenv("DEEPGRAM_API_KEY");
         if (envKey != null && !envKey.isBlank()) apiKeyField.setText(envKey);
+
+        groqKeyField = new PasswordField();
+        groqKeyField.setPromptText("Groq API key  (gsk_...)");
+        groqKeyField.setStyle(FORM_FONT_STYLE);
+        HBox.setHgrow(groqKeyField, Priority.ALWAYS);
+        String groqEnv = System.getenv("GROQ_API_KEY");
+        if (groqEnv != null && !groqEnv.isBlank()) groqKeyField.setText(groqEnv);
 
         Button powerBtn = new Button("⏻");
         powerBtn.setTooltip(new Tooltip("Fechar aplicação"));
@@ -140,29 +153,42 @@ public class InterviewApp extends Application {
                 "-fx-min-width: 34; -fx-min-height: 34; -fx-background-radius: 17;");
         powerBtn.setOnAction(e -> { if (sessionRunning) stopSession(); Platform.exit(); });
 
-        HBox row1 = new HBox(8, formLabel("API Key:"), apiKeyField, powerBtn);
+        HBox row1 = new HBox(8,
+                formLabel("Deepgram:"), apiKeyField,
+                formLabel("Groq:"), groqKeyField,
+                powerBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
 
-        // ── Row 2: empresa + candidato + cargo ──────────────────────────────
-        companyField   = new TextField();
-        companyField.setPromptText("Nome da empresa");
-        companyField.setStyle(FORM_FONT_STYLE);
-        HBox.setHgrow(companyField, Priority.ALWAYS);
-
+        // ── Row 2: name + job + company + sex ────────────────────────────────
         candidateField = new TextField();
-        candidateField.setPromptText("Nome do candidato");
+        candidateField.setPromptText("Candidate name");
         candidateField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(candidateField, Priority.ALWAYS);
 
         jobField = new TextField();
-        jobField.setPromptText("Cargo / Vaga");
+        jobField.setPromptText("Job / role");
         jobField.setStyle(FORM_FONT_STYLE);
         HBox.setHgrow(jobField, Priority.ALWAYS);
 
+        companyField   = new TextField();
+        companyField.setPromptText("Company");
+        companyField.setStyle(FORM_FONT_STYLE);
+        HBox.setHgrow(companyField, Priority.ALWAYS);
+
+        sexCombo = new ComboBox<>(FXCollections.observableArrayList("Male", "Female"));
+        sexCombo.setPromptText("Sex");
+        sexCombo.setStyle(FORM_FONT_STYLE);
+
+        scaleCombo = new ComboBox<>(FXCollections.observableArrayList("5", "10"));
+        scaleCombo.setValue("5");   // most interviews use a 1–5 scale
+        scaleCombo.setStyle(FORM_FONT_STYLE);
+
         HBox row2 = new HBox(8,
-                formLabel("Empresa:"), companyField,
-                formLabel("Candidato:"), candidateField,
-                formLabel("Cargo:"), jobField);
+                formLabel("Name:"), candidateField,
+                formLabel("Job:"), jobField,
+                formLabel("Company:"), companyField,
+                formLabel("Sex:"), sexCombo,
+                formLabel("Stars:"), scaleCombo);
         row2.setAlignment(Pos.CENTER_LEFT);
 
         // ── Row 3: device selectors + session button ─────────────────────────
@@ -258,7 +284,7 @@ public class InterviewApp extends Application {
         }
 
         try {
-            sessionTxtWriter = openSessionTxt(company, candidate);
+            sessionTxtPath = openSessionTxt(company, candidate);
         } catch (IOException e) {
             log.error("Failed to create session TXT", e);
             showAlert("Erro de arquivo", "Não foi possível criar o arquivo de transcrição:\n" + e.getMessage());
@@ -278,26 +304,20 @@ public class InterviewApp extends Application {
 
         Thread.ofVirtual().name("start-session").start(() -> {
             try {
-                DeepgramStreamingProvider mProv = new DeepgramStreamingProvider(apiKey, "mic");
+                // Mic transcription is disabled for now — only the candidate channel
+                // is streamed to Deepgram. The mic is still captured to WAV.
                 DeepgramStreamingProvider cProv = new DeepgramStreamingProvider(apiKey, "candidate");
 
-                mProv.setConnectionCallbacks(
-                        () -> { reconnectingProviders.incrementAndGet();
-                                Platform.runLater(() -> statusDot.setFill(Color.ORANGE)); },
-                        () -> { if (reconnectingProviders.decrementAndGet() == 0)
-                                Platform.runLater(() -> statusDot.setFill(Color.RED)); });
                 cProv.setConnectionCallbacks(
                         () -> { reconnectingProviders.incrementAndGet();
                                 Platform.runLater(() -> statusDot.setFill(Color.ORANGE)); },
                         () -> { if (reconnectingProviders.decrementAndGet() == 0)
                                 Platform.runLater(() -> statusDot.setFill(Color.RED)); });
 
-                mProv.start(Main.DEFAULT_FORMAT, this::onMicEvent);
                 cProv.start(Main.DEFAULT_FORMAT, this::onCandidateEvent);
 
                 AudioCapture mCap = new AudioCapture(micDev.mixerInfo(), Main.DEFAULT_FORMAT,
                         chunk -> {
-                            mProv.sendAudioChunk(chunk);
                             QuestionPanel q = activeQuestion;
                             if (q != null) q.writeAudio(chunk);
                         });
@@ -308,7 +328,7 @@ public class InterviewApp extends Application {
                 cCap.start();
 
                 Platform.runLater(() -> {
-                    micProvider = mProv;   candidateProvider = cProv;
+                    candidateProvider = cProv;   // micProvider stays null (transcription off)
                     micCapture  = mCap;    candidateCapture  = cCap;
                     sessionRunning = true;
                     sessionBtn.setText("⏹  Stop Session");
@@ -373,12 +393,12 @@ public class InterviewApp extends Application {
         if (activeQuestion != null) activeQuestion.markStopped();
 
         // Re-open session TXT when cleared by onSaveSession() and the user starts a new question
-        if (sessionTxtWriter == null && sessionRunning) {
+        if (sessionTxtPath == null && sessionRunning) {
             String company   = companyField.getText().trim();
             String candidate = candidateField.getText().trim();
             if (!company.isEmpty() && !candidate.isEmpty()) {
                 try {
-                    sessionTxtWriter = openSessionTxt(company, candidate);
+                    sessionTxtPath = openSessionTxt(company, candidate);
                 } catch (IOException e) {
                     log.error("Failed to re-create session TXT", e);
                 }
@@ -387,28 +407,19 @@ public class InterviewApp extends Application {
 
         questionCounter++;
 
-        if (sessionTxtWriter != null) {
-            try {
-                if (questionCounter > 1) sessionTxtWriter.newLine();
-                sessionTxtWriter.write("--- Pergunta " + questionCounter + " ---");
-                sessionTxtWriter.newLine();
-                sessionTxtWriter.flush();
-            } catch (IOException e) {
-                log.error("Failed to write question header to TXT", e);
-            }
-        }
-
         QuestionPanel panel = new QuestionPanel(questionCounter);
         activeQuestion = panel;
         questionPanels.add(panel);
         questionsBox.getChildren().add(panel.titledPane);
 
-        // Register with the shared list so PronunciationTab's dropdown updates
+        // Register with the shared list so PronunciationTab's dropdown updates.
+        // The question text now comes from the (manually filled) QUESTION column.
         sessionQuestions.add(new QuestionRef(
                 questionCounter,
                 panel.wavPath,
-                () -> panel.questionFinal.toString()));
+                () -> panel.questionArea.getText().trim()));
 
+        persistSessionTxt();
         saveSessionBtn.setDisable(false);
         Platform.runLater(() -> questionsScroll.setVvalue(1.0));
     }
@@ -448,6 +459,10 @@ public class InterviewApp extends Application {
         candidateField.clear();
         jobField.setDisable(false);
         jobField.clear();
+        sexCombo.setDisable(false);
+        sexCombo.getSelectionModel().clearSelection();
+        sexCombo.setValue(null);
+        scaleCombo.setValue("5");
         log.info("Session cleared — ready for next candidate");
     }
 
@@ -462,7 +477,7 @@ public class InterviewApp extends Application {
         java.io.File file = chooser.showOpenDialog(primaryStage);
         if (file == null) return;
 
-        List<String> sections;
+        List<LoadedQuestion> sections;
         try {
             sections = parseSessionFile(file.toPath());
         } catch (IOException e) {
@@ -488,14 +503,16 @@ public class InterviewApp extends Application {
         }
 
         // Create one read-only panel per section
-        for (String answerText : sections) {
+        for (LoadedQuestion lq : sections) {
             questionCounter++;
             QuestionPanel panel = new QuestionPanel(questionCounter, true);
-            panel.setInitialAnswer(answerText);
+            panel.setInitialQuestion(lq.question());
+            panel.setInitialAnswer(lq.answer());
             panel.markStopped();
             questionPanels.add(panel);
             questionsBox.getChildren().add(panel.titledPane);
-            sessionQuestions.add(new QuestionRef(questionCounter, null, () -> ""));
+            sessionQuestions.add(new QuestionRef(
+                    questionCounter, null, () -> panel.questionArea.getText().trim()));
         }
 
         saveSessionBtn.setDisable(false);
@@ -503,32 +520,51 @@ public class InterviewApp extends Application {
         Platform.runLater(() -> questionsScroll.setVvalue(0.0));
     }
 
-    private static List<String> parseSessionFile(Path path) throws IOException {
-        List<String> sections = new ArrayList<>();
+    /** A question section parsed back from a saved session TXT. */
+    private record LoadedQuestion(String question, String answer) {}
+
+    private static List<LoadedQuestion> parseSessionFile(Path path) throws IOException {
+        List<LoadedQuestion> sections = new ArrayList<>();
         List<String> currentLines = null;
 
         for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
             if (line.matches("--- Pergunta \\d+ ---")) {
-                if (currentLines != null) sections.add(joinLines(currentLines));
+                if (currentLines != null) sections.add(splitQuestionAnswer(currentLines));
                 currentLines = new ArrayList<>();
-            } else if (currentLines != null && !line.isBlank()) {
-                currentLines.add(line);
+            } else if (currentLines != null) {
+                currentLines.add(line);   // keep blanks: they separate question from answer
             }
         }
-        if (currentLines != null) sections.add(joinLines(currentLines));
+        if (currentLines != null) sections.add(splitQuestionAnswer(currentLines));
         return sections;
     }
 
-    private static String joinLines(List<String> lines) {
-        return String.join(" ", lines).trim();
+    // New format: <question lines> <blank> <answer lines>. Old format (no blank
+    // line) is treated as answer-only so legacy files still load correctly.
+    private static LoadedQuestion splitQuestionAnswer(List<String> lines) {
+        int firstBlank = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).isBlank()) { firstBlank = i; break; }
+        }
+        if (firstBlank < 0) {
+            return new LoadedQuestion("", joinNonBlank(lines));
+        }
+        return new LoadedQuestion(
+                joinNonBlank(lines.subList(0, firstBlank)),
+                joinNonBlank(lines.subList(firstBlank + 1, lines.size())));
+    }
+
+    private static String joinNonBlank(List<String> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : lines) {
+            if (s.isBlank()) continue;
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(s.trim());
+        }
+        return sb.toString();
     }
 
     // ── Transcript routing (WebSocket threads → QuestionPanel) ────────────
-
-    private void onMicEvent(TranscriptEvent event) {
-        QuestionPanel q = activeQuestion;
-        if (q != null) q.onMicEvent(event);
-    }
 
     private void onCandidateEvent(TranscriptEvent event) {
         QuestionPanel q = activeQuestion;
@@ -537,20 +573,45 @@ public class InterviewApp extends Application {
 
     // ── File helpers ───────────────────────────────────────────────────────
 
-    private static BufferedWriter openSessionTxt(String company, String candidate) throws IOException {
+    private static Path openSessionTxt(String company, String candidate) throws IOException {
         String dateDir  = LocalDate.now().format(DATE_FOLDER_FMT);
         String filename = sanitizeFilename(company) + "_" + sanitizeFilename(candidate) + ".txt";
         Path dir = Path.of(System.getProperty("user.home"), "Desktop", "Flocareer", "candidatos", dateDir);
         Files.createDirectories(dir);
         Path txt = dir.resolve(filename);
         log.info("Session TXT: {}", txt);
-        return Files.newBufferedWriter(txt, StandardCharsets.UTF_8);
+        return txt;
+    }
+
+    // Rewrites the whole session TXT from the current panels, one block per question:
+    //   --- Pergunta N ---
+    //   <question column>
+    //
+    //   <candidate answer>
+    private void persistSessionTxt() {
+        Path path = sessionTxtPath;
+        if (path == null) return;
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (QuestionPanel p : questionPanels) {
+            if (!first) sb.append(System.lineSeparator());
+            first = false;
+            sb.append("--- Pergunta ").append(p.number).append(" ---").append(System.lineSeparator());
+            sb.append(p.questionArea.getText().trim()).append(System.lineSeparator());
+            sb.append(System.lineSeparator());
+            sb.append(p.answerArea.getText().trim()).append(System.lineSeparator());
+        }
+        try {
+            Files.writeString(path, sb.toString(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.error("Failed to write session TXT", e);
+        }
     }
 
     private void closeSessionTxt() {
-        if (sessionTxtWriter == null) return;
-        try { sessionTxtWriter.close(); } catch (IOException e) { log.error("Failed to close session TXT", e); }
-        sessionTxtWriter = null;
+        if (sessionTxtPath == null) return;
+        persistSessionTxt();   // final flush of the latest panel contents
+        sessionTxtPath = null;
     }
 
     // Replaces characters that Windows forbids in file names and blocks reserved
@@ -597,6 +658,7 @@ public class InterviewApp extends Application {
         companyField.setDisable(!enabled);
         candidateField.setDisable(!enabled);
         jobField.setDisable(!enabled);
+        sexCombo.setDisable(!enabled);
         micCombo.setDisable(!enabled);
         candidateCombo.setDisable(!enabled);
         sessionBtn.setDisable(!enabled);
@@ -630,8 +692,12 @@ public class InterviewApp extends Application {
         alert.showAndWait();
     }
 
-    // Wraps a TextArea with a drag handle below it so the user can resize it vertically.
-    private static Node wrapResizable(TextArea ta) {
+    // Wraps a region (e.g. the 3-column row) with a drag handle below it so the
+    // user can resize its height. The region's children stretch to fill that height.
+    private static Node wrapResizableRow(Region content, double startPrefHeight) {
+        content.setPrefHeight(startPrefHeight);
+        content.setMinHeight(80);
+
         Region handle = new Region();
         handle.setPrefHeight(8);
         handle.setMaxWidth(Double.MAX_VALUE);
@@ -643,16 +709,63 @@ public class InterviewApp extends Application {
 
         handle.setOnMousePressed(e -> {
             startScreenY[0] = e.getScreenY();
-            startHeight[0]  = ta.getHeight() > 0 ? ta.getHeight() : ta.getPrefHeight();
+            startHeight[0]  = content.getHeight() > 0 ? content.getHeight() : content.getPrefHeight();
             e.consume();
         });
         handle.setOnMouseDragged(e -> {
             double delta = e.getScreenY() - startScreenY[0];
-            ta.setPrefHeight(Math.max(40, startHeight[0] + delta));
+            content.setPrefHeight(Math.max(80, startHeight[0] + delta));
             e.consume();
         });
 
-        return new VBox(0, ta, handle);
+        return new VBox(0, content, handle);
+    }
+
+    // Translates Groq HTTP error codes into actionable Portuguese messages.
+    private static String translateGroqError(String msg) {
+        if (msg == null) return "Erro desconhecido";
+        if (msg.contains("HTTP_401")) return "API key Groq inválida ou expirada. Verifique a chave e tente novamente.";
+        if (msg.contains("HTTP_403")) return "Acesso negado (403). Verifique as permissões da API key.";
+        if (msg.contains("HTTP_429")) return "Limite de requisições atingido. Aguarde alguns segundos e tente novamente.";
+        if (msg.contains("HTTP_5"))   return "Erro interno do servidor Groq. Tente novamente em instantes.";
+        return msg;
+    }
+
+    // ── Star rating (parsed from the AI's trailing "RATING: n/max" line) ──────
+
+    private static final Pattern RATING_PATTERN =
+            Pattern.compile("(?im)^\\s*RATING:\\s*(\\d+)\\s*/\\s*(\\d+)\\s*$");
+
+    /** Returns {score, max}; score is -1 when no RATING line is present. */
+    private static int[] parseRating(String text, int fallbackMax) {
+        Matcher m = RATING_PATTERN.matcher(text);
+        if (m.find()) return new int[]{ Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)) };
+        return new int[]{ -1, fallbackMax };
+    }
+
+    private static String stripRatingLine(String text) {
+        return text.replaceAll("(?im)^\\s*RATING:\\s*\\d+\\s*/\\s*\\d+\\s*$", "").trim();
+    }
+
+    private static String renderStars(int score, int max) {
+        if (score < 0 || max <= 0) return "";
+        int s = Math.max(0, Math.min(score, max));
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= max; i++) sb.append(i <= s ? '★' : '☆');
+        return sb.append("  ").append(s).append('/').append(max)
+                 .append(" — ").append(levelLabel(s, max)).toString();
+    }
+
+    // Maps a score onto the 5 named bands, proportionally for any scale (5 or 10).
+    private static String levelLabel(int score, int max) {
+        int level = Math.max(1, Math.min(5, (int) Math.ceil(score * 5.0 / max)));
+        return switch (level) {
+            case 1 -> "Unsatisfactory";
+            case 2 -> "Needs Improvement";
+            case 3 -> "Satisfactory";
+            case 4 -> "Very Good";
+            default -> "Excellent";
+        };
     }
 
     private void onWindowClose() { if (sessionRunning) stopSession(); }
@@ -667,7 +780,6 @@ public class InterviewApp extends Application {
     private class QuestionPanel {
 
         final int number;
-        final StringBuilder questionFinal = new StringBuilder();
         final AtomicBoolean active = new AtomicBoolean(true);
 
         Path wavPath;           // set by initWavWriter(); exposed to QuestionRef
@@ -677,7 +789,11 @@ public class InterviewApp extends Application {
         TitledPane titledPane;
         private TextArea questionArea;
         private TextArea answerArea;
+        private TextArea expectedArea;
+        private TextArea analysisArea;
         private Label    partialLabel;
+        private Label    ratingLabel;
+        private Button   analyzeBtn;
         private Button   stopBtn;
         private Button   continueBtn;
 
@@ -695,15 +811,23 @@ public class InterviewApp extends Application {
             answerArea.setText(text);
         }
 
+        void setInitialQuestion(String text) {
+            questionArea.setText(text);
+        }
+
         // ── UI construction ──────────────────────────────────────────────
 
         private void buildUI() {
-            Label qLabel = sectionLabel("MY QUESTION");
-            questionArea = transcriptArea(3, "Your question will appear here as you speak…");
+            // ── Three side-by-side columns ───────────────────────────────────
+            answerArea   = pasteArea("A resposta do candidato aparece aqui…");
+            expectedArea = pasteArea("Cole aqui a resposta esperada / gabarito…");
+            questionArea = pasteArea("Cole aqui a pergunta…");
 
-            Label aLabel = sectionLabel("CANDIDATE ANSWER");
-            answerArea = transcriptArea(5, "Candidate answer will appear here…");
-            answerArea.setEditable(true);
+            HBox columns = new HBox(8,
+                    column("QUESTION",         questionArea),
+                    column("EXPECTED ANSWER",  expectedArea),
+                    column("CANDIDATE ANSWER", answerArea));
+            columns.setMaxWidth(Double.MAX_VALUE);
 
             partialLabel = new Label();
             partialLabel.setFont(Font.font(null, FontPosture.ITALIC, 12));
@@ -711,8 +835,18 @@ public class InterviewApp extends Application {
             partialLabel.setWrapText(true);
             partialLabel.setMaxWidth(Double.MAX_VALUE);
 
-            Button copyBtn = new Button("📋  Copy Answer");
-            copyBtn.setOnAction(e -> onCopyAnswer(copyBtn));
+            // ── Buttons (with the AI star rating on the left) ──────────────────
+            ratingLabel = new Label();
+            ratingLabel.setStyle("-fx-font-size: 16px; -fx-text-fill: #d4a017; -fx-font-weight: bold;");
+
+            Region buttonsSpacer = new Region();
+            HBox.setHgrow(buttonsSpacer, Priority.ALWAYS);
+
+            Button copyBtn = new Button("📋  Copy Analysis");
+            copyBtn.setOnAction(e -> onCopyAnalysis(copyBtn));
+
+            analyzeBtn = new Button("🤖  Analisar");
+            analyzeBtn.setOnAction(e -> analyze());
 
             continueBtn = new Button("▶  Continue");
             continueBtn.setDisable(true);
@@ -721,21 +855,50 @@ public class InterviewApp extends Application {
             stopBtn = new Button("⏹  Stop");
             stopBtn.setOnAction(e -> stopQuestion(this));
 
-            HBox buttons = new HBox(8, copyBtn, continueBtn, stopBtn);
-            buttons.setAlignment(Pos.CENTER_RIGHT);
+            HBox buttons = new HBox(8,
+                    ratingLabel, buttonsSpacer, copyBtn, analyzeBtn, continueBtn, stopBtn);
+            buttons.setAlignment(Pos.CENTER_LEFT);
             buttons.setPadding(new Insets(4, 0, 0, 0));
 
+            // ── AI analysis output ───────────────────────────────────────────
+            Label analysisLabel = sectionLabel("ANÁLISE DA IA");
+            analysisArea = transcriptArea(6, "A análise da IA aparecerá aqui…");
+
             VBox content = new VBox(6,
-                    qLabel, wrapResizable(questionArea),
-                    new Separator(),
-                    aLabel, wrapResizable(answerArea),
+                    wrapResizableRow(columns, 150),
                     partialLabel,
-                    buttons);
+                    buttons,
+                    new Separator(),
+                    analysisLabel, analysisArea);
             content.setPadding(new Insets(10));
 
             titledPane = new TitledPane("Question " + number + "  🔴", content);
             titledPane.setExpanded(true);
             titledPane.setAnimated(true);
+        }
+
+        // Builds one of the three equal-width columns: a section label above a
+        // text area that stretches to fill the row's height.
+        private VBox column(String labelText, TextArea ta) {
+            VBox.setVgrow(ta, Priority.ALWAYS);
+            ta.setMaxHeight(Double.MAX_VALUE);
+            VBox col = new VBox(4, sectionLabel(labelText), ta);
+            col.setMaxHeight(Double.MAX_VALUE);
+            col.setMaxWidth(Double.MAX_VALUE);
+            HBox.setHgrow(col, Priority.ALWAYS);
+            return col;
+        }
+
+        // An editable, wrapping text area whose font follows the global A−/A+ control.
+        private TextArea pasteArea(String prompt) {
+            TextArea ta = new TextArea();
+            ta.setEditable(true);
+            ta.setWrapText(true);
+            ta.styleProperty().bind(Bindings.createStringBinding(
+                    () -> "-fx-font-size: " + fontSize.get() + "px;",
+                    fontSize));
+            ta.setPromptText(prompt);
+            return ta;
         }
 
         private Label sectionLabel(String text) {
@@ -801,16 +964,6 @@ public class InterviewApp extends Application {
 
         // ── Transcript events (arrive on WebSocket thread) ───────────────
 
-        void onMicEvent(TranscriptEvent event) {
-            if (!event.isFinal()) return;
-            Platform.runLater(() -> {
-                questionFinal.append(event.text()).append(" ");
-                questionArea.setText(questionFinal.toString());
-                questionArea.setScrollTop(Double.MAX_VALUE);
-                updateTitle();
-            });
-        }
-
         void onCandidateEvent(TranscriptEvent event) {
             Platform.runLater(() -> {
                 if (event.isFinal()) {
@@ -833,7 +986,7 @@ public class InterviewApp extends Application {
                         answerArea.setScrollTop(Double.MAX_VALUE);
                     }
                     partialLabel.setText("");
-                    appendToSessionTxt(event.text());
+                    persistSessionTxt();
                 } else {
                     partialLabel.setText(event.text());
                 }
@@ -886,35 +1039,67 @@ public class InterviewApp extends Application {
 
         // ── Helpers ─────────────────────────────────────────────────────
 
-        private void appendToSessionTxt(String text) {
-            BufferedWriter w = sessionTxtWriter;   // outer-class field, FX thread only
-            if (w == null) return;
-            try {
-                w.write(text);
-                w.newLine();
-                w.flush();
-            } catch (IOException e) {
-                log.error("TXT write error (question {})", number, e);
-            }
-        }
-
         private void updateTitle() {
-            String q = questionFinal.toString().trim();
+            String q = questionArea.getText().trim();
             String preview = q.isEmpty() ? "" :
                     ": \"" + (q.length() > 55 ? q.substring(0, 55) + "…" : q) + "\"";
             String indicator = active.get() ? "  🔴" : "  ✓";
             titledPane.setText("Question " + number + preview + indicator);
         }
 
-        private void onCopyAnswer(Button btn) {
-            String answer = answerArea.getText().trim();
-            if (answer.isEmpty()) return;
+        // Sends question + expected answer + candidate transcription to Groq and
+        // renders the structured evaluation into the analysis box below the columns.
+        private void analyze() {
+            String key       = groqKeyField.getText().trim();
+            String question  = questionArea.getText().trim();
+            String expected  = expectedArea.getText().trim();
+            String candidate = answerArea.getText().trim();
+            String name      = candidateField.getText().trim();
+            String sex       = sexCombo.getValue();   // "Male" / "Female" / null
+            int    scale     = "10".equals(scaleCombo.getValue()) ? 10 : 5;
+
+            if (key.isEmpty())       { showAlert("Groq API Key ausente", "Informe a Groq API key no campo \"Groq\" no topo."); return; }
+            if (question.isEmpty())  { showAlert("Pergunta vazia",  "Preencha ou cole a pergunta na coluna QUESTION."); return; }
+            if (expected.isEmpty())  { showAlert("Gabarito vazio",  "Cole a resposta esperada na coluna EXPECTED ANSWER."); return; }
+            if (candidate.isEmpty()) { showAlert("Sem resposta",    "A coluna CANDIDATE ANSWER está vazia."); return; }
+
+            analyzeBtn.setDisable(true);
+            analyzeBtn.setText("Analisando…");
+            analysisArea.setText("");
+            ratingLabel.setText("");
+
+            Thread.ofVirtual().name("answer-evaluate-q" + number).start(() -> {
+                try {
+                    String result = GroqClient.evaluateAnswer(key, question, expected, candidate, name, sex, scale);
+                    int[] rating  = parseRating(result, scale);
+                    String body   = stripRatingLine(result);
+                    Platform.runLater(() -> {
+                        analysisArea.setText(body);
+                        ratingLabel.setText(renderStars(rating[0], rating[1]));
+                        resetAnalyzeBtn();
+                    });
+                } catch (Exception ex) {
+                    log.error("Per-question evaluation failed (q{})", number, ex);
+                    String detail = translateGroqError(ex.getMessage());
+                    Platform.runLater(() -> { analysisArea.setText("Erro: " + detail); resetAnalyzeBtn(); });
+                }
+            });
+        }
+
+        private void resetAnalyzeBtn() {
+            analyzeBtn.setDisable(false);
+            analyzeBtn.setText("🤖  Analisar");
+        }
+
+        private void onCopyAnalysis(Button btn) {
+            String analysis = analysisArea.getText().trim();
+            if (analysis.isEmpty()) return;
             ClipboardContent cc = new ClipboardContent();
-            cc.putString(answer);
+            cc.putString(analysis);
             Clipboard.getSystemClipboard().setContent(cc);
             btn.setText("✓  Copied!");
             PauseTransition p = new PauseTransition(Duration.seconds(1.5));
-            p.setOnFinished(e -> btn.setText("📋  Copy Answer"));
+            p.setOnFinished(e -> btn.setText("📋  Copy Analysis"));
             p.play();
         }
     }

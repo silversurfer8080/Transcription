@@ -24,9 +24,11 @@ public class GroqClient {
     }
 
     public static String evaluateAnswer(String apiKey, String question,
-                                        String expectedAnswer, String candidateAnswer)
+                                        String expectedAnswer, String candidateAnswer,
+                                        String candidateName, String gender, int starScale)
             throws Exception {
-        return call(apiKey, buildEvaluationPrompt(question, expectedAnswer, candidateAnswer));
+        return call(apiKey, buildEvaluationPrompt(
+                question, expectedAnswer, candidateAnswer, candidateName, gender, starScale));
     }
 
     private static String call(String apiKey, String userPrompt) throws Exception {
@@ -83,27 +85,60 @@ public class GroqClient {
     }
 
     static String buildEvaluationPrompt(String question, String expectedAnswer,
-                                                 String candidateAnswer) {
+                                        String candidateAnswer, String candidateName,
+                                        String gender, int starScale) {
+        int max = (starScale == 10) ? 10 : 5;
+        String pronouns = "they/them";
+        if (gender != null) {
+            if (gender.equalsIgnoreCase("Male"))        pronouns = "he/him";
+            else if (gender.equalsIgnoreCase("Female")) pronouns = "she/her";
+        }
+        String name = (candidateName == null) ? "" : candidateName.trim();
+        String whoLine = name.isEmpty()
+                ? "Refer to the candidate using the pronouns " + pronouns + "."
+                : "The candidate's name is " + name + "; refer to them as " + name
+                  + " and use " + pronouns + " pronouns.";
+
+        String scaleGuide = (max == 10)
+                ? "Rate the answer from 1 to 10 stars using these bands: "
+                  + "1-2 = Unsatisfactory, 3-4 = Needs Improvement, 5-6 = Satisfactory, "
+                  + "7-8 = Very Good, 9-10 = Excellent."
+                : "Rate the answer from 1 to 5 stars using this scale: "
+                  + "1 = Unsatisfactory, 2 = Needs Improvement, 3 = Satisfactory, "
+                  + "4 = Very Good, 5 = Excellent.";
+
         return """
-                Você é um avaliador técnico experiente em entrevistas de tecnologia.
+                You are an experienced technical interviewer assessing a candidate's answer.
 
-                **Pergunta feita ao candidato:**
                 %s
 
-                **Resposta esperada (gabarito / pontos-chave):**
+                Question asked:
                 %s
 
-                **Transcrição da resposta do candidato:**
+                Expected answer (model answer / key points):
                 %s
 
-                Avalie a resposta considerando:
-                1. **Precisão técnica** — acertou os conceitos centrais?
-                2. **Completude** — cobriu os pontos essenciais do gabarito?
-                3. **Pontos fortes**
-                4. **Lacunas ou erros** importantes
-                5. **Veredicto:** Excelente / Bom / Parcial / Insuficiente — com justificativa em 1-2 frases
+                Candidate's answer (automatic speech-to-text transcription):
+                %s
 
-                Responda em português, de forma direta e estruturada.
-                """.formatted(question, expectedAnswer, candidateAnswer);
+                The candidate's answer was captured by automatic speech recognition, so it may \
+                contain transcription errors, missing or odd punctuation, filler words and the \
+                natural hesitations of spoken language. Judge the meaning and intent behind the \
+                words and never penalize wording, grammar or artifacts that are clearly \
+                transcription noise rather than a real conceptual mistake.
+
+                Write your assessment as flowing prose in at most two paragraphs, with no bullet \
+                points and no section headings. Be objective and professional: clearly call out \
+                when the candidate missed important points from the expected answer or stayed too \
+                superficial, and do not inflate a weak answer. Assess technical accuracy and \
+                completeness against the expected key points, and acknowledge genuine strengths \
+                only when they exist.
+
+                %s
+
+                Keep the tone professional and direct — neither harsh nor overly kind. Respond in \
+                English. After the assessment, output the score on its own very last line in \
+                exactly this format, with no extra words: RATING: n/%d
+                """.formatted(whoLine, question, expectedAnswer, candidateAnswer, scaleGuide, max);
     }
 }

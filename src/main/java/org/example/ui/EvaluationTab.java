@@ -99,7 +99,7 @@ public class EvaluationTab {
 
         Thread.ofVirtual().name("answer-evaluate").start(() -> {
             try {
-                String result = GroqClient.evaluateAnswer(apiKey, question, expected, candidate);
+                String result = GroqClient.evaluateAnswer(apiKey, question, expected, candidate, "", null, 5);
                 Platform.runLater(() -> {
                     resultArea.setText(result);
                     resetBtn();

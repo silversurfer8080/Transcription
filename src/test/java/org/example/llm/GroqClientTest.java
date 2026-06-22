@@ -88,15 +88,78 @@ class GroqClientTest {
         String prompt = GroqClient.buildEvaluationPrompt(
                 "What is a Java virtual thread?",
                 "Lightweight thread managed by the JVM.",
-                "It runs without blocking an OS thread.");
+                "It runs without blocking an OS thread.",
+                "Maria", "Female", 5);
         assertTrue(prompt.contains("What is a Java virtual thread?"),    "Question must be embedded");
         assertTrue(prompt.contains("Lightweight thread managed by the JVM."), "Expected answer must be embedded");
         assertTrue(prompt.contains("without blocking an OS thread"),          "Candidate answer must be embedded");
     }
 
     @Test
-    void buildEvaluationPrompt_containsVeredictoKeyword() {
-        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B");
-        assertTrue(prompt.contains("Veredicto"), "Evaluation prompt must request a verdict");
+    void buildEvaluationPrompt_instructsEnglishResponse() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5);
+        assertTrue(prompt.contains("Respond in English"),
+                "Evaluation must be returned in English");
+    }
+
+    @Test
+    void buildEvaluationPrompt_warnsThatAnswerIsSpeechToText() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5).toLowerCase();
+        assertTrue(prompt.contains("speech-to-text") || prompt.contains("speech recognition"),
+                "Prompt must tell the model the answer is an automatic STT transcription");
+    }
+
+    @Test
+    void buildEvaluationPrompt_asksForAtMostTwoParagraphs() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5);
+        assertTrue(prompt.contains("two paragraphs"),
+                "Evaluation must be limited to at most two paragraphs");
+    }
+
+    @Test
+    void buildEvaluationPrompt_includesCandidateNameWhenProvided() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "Carlos", "Male", 5);
+        assertTrue(prompt.contains("Carlos"), "Candidate name must appear in the prompt");
+    }
+
+    @Test
+    void buildEvaluationPrompt_maleGender_usesHeHimPronouns() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "Carlos", "Male", 5);
+        assertTrue(prompt.contains("he/him"), "Male candidate must use he/him pronouns");
+    }
+
+    @Test
+    void buildEvaluationPrompt_femaleGender_usesSheHerPronouns() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "Maria", "Female", 5);
+        assertTrue(prompt.contains("she/her"), "Female candidate must use she/her pronouns");
+    }
+
+    @Test
+    void buildEvaluationPrompt_nullGender_fallsBackToNeutralPronouns() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5);
+        assertTrue(prompt.contains("they/them"), "Unspecified gender must use neutral pronouns");
+    }
+
+    // ── Star-rating scale ─────────────────────────────────────────────────────
+
+    @Test
+    void buildEvaluationPrompt_fiveStarScale_listsFiveLevelsAndRatingLine() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5);
+        assertTrue(prompt.contains("1 = Unsatisfactory"), "5-star scale must define level 1");
+        assertTrue(prompt.contains("5 = Excellent"),      "5-star scale must define level 5");
+        assertTrue(prompt.contains("RATING: n/5"),        "Prompt must ask for a /5 rating line");
+    }
+
+    @Test
+    void buildEvaluationPrompt_tenStarScale_usesBandsAndRatingLine() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 10);
+        assertTrue(prompt.contains("9-10 = Excellent"), "10-star scale must use proportional bands");
+        assertTrue(prompt.contains("RATING: n/10"),     "Prompt must ask for a /10 rating line");
+    }
+
+    @Test
+    void buildEvaluationPrompt_invalidScale_fallsBackToFive() {
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 7);
+        assertTrue(prompt.contains("RATING: n/5"), "Unsupported scales must fall back to 5 stars");
     }
 }
