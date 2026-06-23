@@ -90,6 +90,7 @@ public class InterviewApp extends Application {
     private Circle statusDot;
     private Button newQuestionBtn;
     private Button saveSessionBtn;
+    private Button discardSessionBtn;
     private Button openSessionBtn;
     private VBox questionsBox;
     private ScrollPane questionsScroll;
@@ -201,6 +202,10 @@ public class InterviewApp extends Application {
         saveSessionBtn.setDisable(true);
         saveSessionBtn.setOnAction(e -> onSaveSession());
 
+        discardSessionBtn = new Button("❌  Descartar Sessão");
+        discardSessionBtn.setDisable(true);
+        discardSessionBtn.setOnAction(e -> onDiscardSession());
+
         openSessionBtn = new Button("📂  Abrir Sessão");
         openSessionBtn.setOnAction(e -> onOpenSession());
 
@@ -212,7 +217,8 @@ public class InterviewApp extends Application {
         fontIncBtn.setOnAction(e -> { if (fontSize.get() < 36) fontSize.set(fontSize.get() + 1); });
 
         Separator vertSep = new Separator(Orientation.VERTICAL);
-        HBox row4 = new HBox(8, newQuestionBtn, saveSessionBtn, openSessionBtn, vertSep, fontLabel, fontDecBtn, fontIncBtn);
+        HBox row4 = new HBox(8, newQuestionBtn, saveSessionBtn, discardSessionBtn, openSessionBtn,
+                vertSep, fontLabel, fontDecBtn, fontIncBtn);
         row4.setAlignment(Pos.CENTER_LEFT);
 
         VBox controls = new VBox(8, row1, row2, row3, row4);
@@ -296,6 +302,7 @@ public class InterviewApp extends Application {
                     sessionBtn.setDisable(false);
                     statusDot.setFill(Color.RED);
                     newQuestionBtn.setDisable(false);
+                    discardSessionBtn.setDisable(false);   // available even with no questions yet
                     // Re-enable Continue on any already-stopped panels from a previous round
                     questionPanels.forEach(p -> { if (!p.active.get()) p.setContinueEnabled(true); });
                     log.info("Session started — candidate='{}'", candDev.name());
@@ -322,7 +329,9 @@ public class InterviewApp extends Application {
         saveSessionBtn.setDisable(true);
 
         if (activeQuestion != null) { activeQuestion.markStopped(); activeQuestion = null; }
-        closeSessionTxt();
+        // Flush the latest content but KEEP sessionTxtPath so the file can still be
+        // discarded after stopping (Stop does not null the path; Fechar/Descartar do).
+        persistSessionTxt();
 
         // Disable Continue buttons while no session is running
         questionPanels.forEach(p -> p.setContinueEnabled(false));
@@ -338,8 +347,11 @@ public class InterviewApp extends Application {
                 setSessionControlsEnabled(true);
                 sessionBtn.setText("▶  Start Session");
                 statusDot.setFill(Color.LIGHTGRAY);
-                // Keep save/clear button available so the user can review then explicitly clear
-                saveSessionBtn.setDisable(questionPanels.isEmpty());
+                // Keep save/clear and discard available so the user can review,
+                // then explicitly keep (Fechar) or delete (Descartar) the session.
+                boolean nothingToKeep = questionPanels.isEmpty();
+                saveSessionBtn.setDisable(nothingToKeep);
+                discardSessionBtn.setDisable(sessionTxtPath == null && nothingToKeep);
                 log.info("Session stopped");
             });
         });
@@ -372,6 +384,7 @@ public class InterviewApp extends Application {
 
         persistSessionTxt();
         saveSessionBtn.setDisable(false);
+        discardSessionBtn.setDisable(false);
         Platform.runLater(() -> questionsScroll.setVvalue(1.0));
     }
 
@@ -388,9 +401,39 @@ public class InterviewApp extends Application {
         confirm.setHeaderText(null);
         confirm.setContentText(
                 "Limpar todos os painéis e preparar para a próxima entrevista?\n\n" +
-                "Os arquivos TXT e WAV já foram salvos automaticamente em disco.");
+                "O arquivo de transcrição já foi salvo automaticamente em disco.");
         confirm.getButtonTypes().setAll(btnClear, btnCancel);
         confirm.showAndWait().ifPresent(bt -> { if (bt == btnClear) doClearSession(); });
+    }
+
+    // Discards the current session: stops it, DELETES the saved TXT from disk, and
+    // clears the panels. For when a candidate no-shows and there's nothing to keep.
+    private void onDiscardSession() {
+        ButtonType btnDiscard = new ButtonType("Descartar", ButtonBar.ButtonData.OK_DONE);
+        ButtonType btnCancel  = new ButtonType("Cancelar", ButtonBar.ButtonData.CANCEL_CLOSE);
+        Alert confirm = new Alert(Alert.AlertType.WARNING);
+        confirm.setTitle("Descartar sessão");
+        confirm.setHeaderText(null);
+        confirm.setContentText(
+                "Descartar a sessão atual e APAGAR o arquivo salvo em disco?\n\n" +
+                "Use quando o candidato não compareceu. Esta ação não pode ser desfeita.");
+        confirm.getButtonTypes().setAll(btnDiscard, btnCancel);
+        confirm.showAndWait().ifPresent(bt -> { if (bt == btnDiscard) doDiscardSession(); });
+    }
+
+    private void doDiscardSession() {
+        Path toDelete = sessionTxtPath;
+        if (sessionRunning) stopSession();   // stop capture/provider; keeps the path
+        if (toDelete != null) {
+            try {
+                Files.deleteIfExists(toDelete);
+                log.info("Discarded session TXT: {}", toDelete);
+            } catch (IOException e) {
+                log.error("Failed to delete session TXT: {}", toDelete, e);
+            }
+        }
+        sessionTxtPath = null;   // prevent doClearSession() from re-persisting the file
+        doClearSession();
     }
 
     private void doClearSession() {
@@ -403,6 +446,7 @@ public class InterviewApp extends Application {
         questionPanels.clear();
         questionCounter = 0;
         saveSessionBtn.setDisable(true);
+        discardSessionBtn.setDisable(true);
         companyField.setDisable(false);
         companyField.clear();
         candidateField.setDisable(false);
