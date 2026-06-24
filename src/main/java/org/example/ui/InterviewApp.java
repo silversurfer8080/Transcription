@@ -806,11 +806,12 @@ public class InterviewApp extends Application {
             expectedArea = pasteArea("Cole aqui a resposta esperada / gabarito…");
             questionArea = pasteArea("Cole aqui a pergunta…");
 
-            HBox columns = new HBox(8,
+            // SplitPane gives draggable dividers so the user can resize column widths.
+            SplitPane columns = new SplitPane(
                     column("QUESTION",         questionArea),
                     column("EXPECTED ANSWER",  expectedArea),
                     column("CANDIDATE ANSWER", answerArea));
-            columns.setMaxWidth(Double.MAX_VALUE);
+            columns.setDividerPositions(0.34, 0.67);
 
             partialLabel = new Label();
             partialLabel.setFont(Font.font(null, FontPosture.ITALIC, 12));
@@ -860,15 +861,15 @@ public class InterviewApp extends Application {
             titledPane.setAnimated(true);
         }
 
-        // Builds one of the three equal-width columns: a section label above a
-        // text area that stretches to fill the row's height.
+        // Builds one SplitPane column: a section label above a text area that
+        // stretches to fill the pane. A small min width lets dividers be dragged
+        // narrow without letting a column collapse to nothing.
         private VBox column(String labelText, TextArea ta) {
             VBox.setVgrow(ta, Priority.ALWAYS);
             ta.setMaxHeight(Double.MAX_VALUE);
             VBox col = new VBox(4, sectionLabel(labelText), ta);
             col.setMaxHeight(Double.MAX_VALUE);
-            col.setMaxWidth(Double.MAX_VALUE);
-            HBox.setHgrow(col, Priority.ALWAYS);
+            col.setMinWidth(60);
             return col;
         }
 
