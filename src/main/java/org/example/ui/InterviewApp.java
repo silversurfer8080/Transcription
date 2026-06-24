@@ -144,12 +144,12 @@ public class InterviewApp extends Application {
         candidateField = new TextField();
         candidateField.setPromptText("Candidate name");
         candidateField.setStyle(FORM_FONT_STYLE);
-        candidateField.setPrefWidth(180);
+        candidateField.setPrefWidth(240);
 
         jobField = new TextField();
         jobField.setPromptText("Job / role");
         jobField.setStyle(FORM_FONT_STYLE);
-        jobField.setPrefWidth(150);
+        jobField.setPrefWidth(220);
 
         companyField   = new TextField();
         companyField.setPromptText("Company");
@@ -650,9 +650,9 @@ public class InterviewApp extends Application {
         companyField.setDisable(!enabled);
         candidateField.setDisable(!enabled);
         jobField.setDisable(!enabled);
-        sexCombo.setDisable(!enabled);
         candidateCombo.setDisable(!enabled);
         sessionBtn.setDisable(!enabled);
+        // sexCombo and scaleCombo stay enabled during a session so they can be set after Start.
     }
 
     private static String sanitizeErrorMessage(String msg) {

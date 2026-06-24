@@ -109,17 +109,21 @@ public class GroqClient {
                 words and never penalize wording, grammar or artifacts that are clearly \
                 transcription noise rather than a real conceptual mistake.
 
-                Write your assessment as flowing prose in at most two paragraphs, with no bullet \
-                points and no section headings. Be objective and professional: clearly call out \
-                when the candidate missed important points or stayed too superficial, and do not \
-                inflate a weak answer. Assess the technical accuracy and completeness of the \
-                answer, and acknowledge genuine strengths only when they exist.
+                Write your assessment as flowing prose in two to three, at most four paragraphs, \
+                with no bullet points and no section headings. Be objective and professional: \
+                clearly call out when the candidate missed important points or stayed too \
+                superficial, and do not inflate a weak answer, but the candidate's answer could be \
+                slightly different from the expected answer and even so be correct, so don't be too \
+                harsh on what is expected, especially when it comes to the coding question. Assess \
+                the technical accuracy and completeness of the answer, and acknowledge genuine \
+                strengths only when they exist.
 
                 %s
 
-                Keep the tone professional and direct — neither harsh nor overly kind. Respond in \
-                English. After the assessment, output the score on its own very last line in \
-                exactly this format, with no extra words: RATING: n/%d
+                Keep the tone professional and direct — not harsh. Be kind and bear in mind this \
+                is an interview, but do not be overly kind. Respond in English. After the \
+                assessment, output the score on its own very last line in exactly this format, \
+                with no extra words: RATING: n/%d
                 """.formatted(whoLine, question, expectedSection, candidateAnswer, scaleGuide, max);
     }
 }

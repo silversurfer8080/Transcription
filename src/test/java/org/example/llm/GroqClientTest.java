@@ -71,10 +71,10 @@ class GroqClientTest {
     }
 
     @Test
-    void buildEvaluationPrompt_asksForAtMostTwoParagraphs() {
+    void buildEvaluationPrompt_asksForProseNotBullets() {
         String prompt = GroqClient.buildEvaluationPrompt("Q", "A", "B", "", null, 5);
-        assertTrue(prompt.contains("two paragraphs"),
-                "Evaluation must be limited to at most two paragraphs");
+        assertTrue(prompt.contains("paragraphs"),   "Evaluation must be written as paragraphs");
+        assertTrue(prompt.contains("no bullet points"), "Evaluation must not use bullet points");
     }
 
     @Test
