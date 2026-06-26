@@ -1,0 +1,186 @@
+/* ============================================================
+   Interview Assistant — modern blue theme
+   ============================================================ */
+
+.root {
+    -app-primary:        #2563EB;
+    -app-primary-hover:  #1D4ED8;
+    -app-primary-pressed:#1E40AF;
+    -app-secondary:      #3B82F6;
+    -app-accent:         #0EA5E9;
+    -app-surface:        #F1F5F9;
+    -app-card:           #FFFFFF;
+    -app-border:         #E2E8F0;
+    -app-text:           #0F172A;
+    -app-text-muted:     #64748B;
+    -app-danger:         #DC2626;
+    -app-danger-hover:   #B91C1C;
+    -app-amber:          #F59E0B;
+    -app-tint:           #EFF6FF;
+
+    -fx-font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+    -fx-font-size: 13px;
+    -fx-background-color: -app-surface;
+    /* Make the JavaFX-wide focus color match the palette */
+    -fx-focus-color: -app-primary;
+    -fx-faint-focus-color: transparent;
+}
+
+/* ---- Labels ---- */
+.label { -fx-text-fill: -app-text; }
+.form-label { -fx-text-fill: -app-text; -fx-font-weight: 600; }
+.muted-label { -fx-text-fill: -app-text-muted; }
+.section-label {
+    -fx-text-fill: -app-text-muted;
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+}
+.source-label { -fx-text-fill: -app-text-muted; -fx-font-style: italic; }
+.partial-label { -fx-text-fill: -app-text-muted; -fx-font-style: italic; -fx-font-size: 12px; }
+.rating-label { -fx-text-fill: -app-amber; -fx-font-size: 16px; -fx-font-weight: 700; }
+
+/* ---- Buttons (base) ---- */
+.button {
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
+    -fx-padding: 6px 14px;
+    -fx-font-size: 13px;
+    -fx-font-weight: 600;
+    -fx-cursor: hand;
+    -fx-background-color: -app-card;
+    -fx-text-fill: -app-text;
+    -fx-border-color: -app-border;
+    -fx-border-width: 1px;
+}
+.button:hover  { -fx-background-color: -app-tint; }
+.button:armed  { -fx-background-color: -app-border; }
+.button:focused {
+    -fx-border-color: -app-primary;
+    -fx-effect: dropshadow(gaussian, rgba(37,99,235,0.35), 6, 0.0, 0, 0);
+}
+.button:disabled { -fx-opacity: 0.45; -fx-cursor: default; }
+
+/* icon color follows text color of each variant */
+.button .ikonli-font-icon { -fx-icon-color: -app-text; -fx-icon-size: 16px; }
+
+/* Primary (filled blue) */
+.btn-primary {
+    -fx-background-color: -app-primary;
+    -fx-text-fill: white;
+    -fx-border-color: transparent;
+}
+.btn-primary:hover  { -fx-background-color: -app-primary-hover; }
+.btn-primary:armed  { -fx-background-color: -app-primary-pressed; }
+.btn-primary .ikonli-font-icon { -fx-icon-color: white; }
+
+/* Secondary (outline blue) */
+.btn-secondary {
+    -fx-background-color: -app-card;
+    -fx-text-fill: -app-secondary;
+    -fx-border-color: -app-secondary;
+}
+.btn-secondary:hover { -fx-background-color: -app-tint; }
+.btn-secondary .ikonli-font-icon { -fx-icon-color: -app-secondary; }
+
+/* Danger (outline red; used for Stop / Discard) */
+.btn-danger {
+    -fx-background-color: -app-card;
+    -fx-text-fill: -app-danger;
+    -fx-border-color: -app-danger;
+}
+.btn-danger:hover { -fx-background-color: #FEF2F2; }
+.btn-danger .ikonli-font-icon { -fx-icon-color: -app-danger; }
+
+/* Ghost (font A-/A+, low emphasis) */
+.btn-ghost {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-text-fill: -app-text-muted;
+    -fx-padding: 4px 10px;
+}
+.btn-ghost:hover { -fx-background-color: -app-tint; -fx-text-fill: -app-text; }
+
+/* Round icon-only button (power) */
+.btn-icon {
+    -fx-min-width: 34px; -fx-min-height: 34px;
+    -fx-max-width: 34px; -fx-max-height: 34px;
+    -fx-background-radius: 17px;
+    -fx-border-radius: 17px;
+    -fx-padding: 0;
+}
+/* Filled danger icon button = .btn-icon.btn-danger combination */
+.btn-icon.btn-danger {
+    -fx-background-color: -app-danger;
+    -fx-border-color: transparent;
+}
+.btn-icon.btn-danger:hover { -fx-background-color: -app-danger-hover; }
+.btn-icon.btn-danger .ikonli-font-icon { -fx-icon-color: white; }
+
+/* ---- Text inputs ---- */
+.text-field, .password-field, .text-area, .combo-box {
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
+    -fx-border-color: -app-border;
+    -fx-border-width: 1px;
+    -fx-background-color: -app-card;
+    -fx-text-fill: -app-text;
+    -fx-prompt-text-fill: -app-text-muted;
+}
+.text-field, .password-field { -fx-padding: 6px 10px; }
+.text-field:focused, .password-field:focused, .text-area:focused, .combo-box:focused {
+    -fx-border-color: -app-primary;
+}
+.text-area { -fx-padding: 2px; }
+.text-area .content { -fx-background-radius: 7px; -fx-background-color: -app-card; }
+
+/* ComboBox internals */
+.combo-box { -fx-padding: 2px 4px; }
+.combo-box .list-cell { -fx-text-fill: -app-text; -fx-padding: 4px 8px; }
+.combo-box-popup .list-view {
+    -fx-background-radius: 8px; -fx-border-radius: 8px;
+    -fx-border-color: -app-border; -fx-background-color: -app-card;
+}
+.combo-box-popup .list-view .list-cell:filled:hover {
+    -fx-background-color: -app-tint; -fx-text-fill: -app-text;
+}
+
+/* ---- TitledPane (question panels) ---- */
+.titled-pane > .title {
+    -fx-background-color: -app-tint;
+    -fx-background-radius: 8px 8px 0 0;
+    -fx-border-color: -app-border;
+    -fx-border-width: 1px 1px 0 1px;
+    -fx-border-radius: 8px 8px 0 0;
+    -fx-padding: 6px 10px;
+    -fx-font-weight: 600;
+}
+.titled-pane > .title > .text { -fx-fill: -app-text; }
+.titled-pane > *.content {
+    -fx-background-color: -app-card;
+    -fx-border-color: -app-border;
+    -fx-border-width: 0 1px 1px 1px;
+    -fx-background-radius: 0 0 8px 8px;
+    -fx-border-radius: 0 0 8px 8px;
+}
+
+/* ---- ScrollPane / SplitPane / Separator ---- */
+.scroll-pane { -fx-background-color: transparent; }
+.scroll-pane > .viewport { -fx-background-color: transparent; }
+.split-pane { -fx-background-color: transparent; -fx-padding: 0; }
+.split-pane > .split-pane-divider {
+    -fx-background-color: -app-border;
+    -fx-padding: 0 1px;
+}
+.separator .line { -fx-border-color: -app-border; }
+
+/* Drag handle used by wrapResizableRow */
+.resize-handle {
+    -fx-background-color: -app-border;
+    -fx-background-radius: 3px;
+}
+.resize-handle:hover { -fx-background-color: -app-secondary; }
+
+/* ---- Dialogs (Alerts) — optional polish ---- */
+.app-dialog { -fx-background-color: -app-card; }
+.app-dialog .header-panel { -fx-background-color: -app-tint; }
+.app-dialog .button-bar .button { -fx-font-weight: 600; }

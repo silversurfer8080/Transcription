@@ -20,9 +20,8 @@ import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
-import javafx.scene.text.Font;
-import javafx.scene.text.FontPosture;
 import javafx.stage.FileChooser;
+import org.kordamp.ikonli.javafx.FontIcon;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import org.example.Main;
@@ -60,6 +59,7 @@ public class InterviewApp extends Application {
 
     // Font size for the top form labels/fields — a couple px above the Modena default (13px)
     private static final String FORM_FONT_STYLE = "-fx-font-size: 15px;";
+    private static final String STYLESHEET = "/styles/app.css";
 
     // ---- session state (FX thread only, except activeQuestion which is volatile) ----
     private AudioCapture candidateCapture;
@@ -104,7 +104,9 @@ public class InterviewApp extends Application {
         } catch (Exception ignored) {}
 
         Region root = (Region) buildInterviewTabContent();
-        stage.setScene(new Scene(root, 820, 700));
+        Scene scene = new Scene(root, 820, 700);
+        applyStylesheet(scene);
+        stage.setScene(scene);
         stage.setAlwaysOnTop(false);
         stage.setOnCloseRequest(e -> onWindowClose());
         stage.show();
@@ -115,6 +117,7 @@ public class InterviewApp extends Application {
         apiKeyField = new PasswordField();
         apiKeyField.setPromptText("Deepgram API key");
         apiKeyField.setStyle(FORM_FONT_STYLE);
+        apiKeyField.getStyleClass().add("field");
         HBox.setHgrow(apiKeyField, Priority.ALWAYS);
         String envKey = System.getenv("DEEPGRAM_API_KEY");
         if (envKey != null && !envKey.isBlank()) apiKeyField.setText(envKey);
@@ -122,15 +125,15 @@ public class InterviewApp extends Application {
         groqKeyField = new PasswordField();
         groqKeyField.setPromptText("Groq API key  (gsk_...)");
         groqKeyField.setStyle(FORM_FONT_STYLE);
+        groqKeyField.getStyleClass().add("field");
         HBox.setHgrow(groqKeyField, Priority.ALWAYS);
         String groqEnv = System.getenv("GROQ_API_KEY");
         if (groqEnv != null && !groqEnv.isBlank()) groqKeyField.setText(groqEnv);
 
-        Button powerBtn = new Button("⏻");
+        Button powerBtn = new Button("");
+        powerBtn.setGraphic(icon("mdi2p-power"));
+        powerBtn.getStyleClass().addAll("btn-icon", "btn-danger");
         powerBtn.setTooltip(new Tooltip("Fechar aplicação"));
-        powerBtn.setStyle(
-                "-fx-font-size: 16; -fx-background-color: #c0392b; -fx-text-fill: white;" +
-                "-fx-min-width: 34; -fx-min-height: 34; -fx-background-radius: 17;");
         powerBtn.setOnAction(e -> { if (sessionRunning) stopSession(); Platform.exit(); });
 
         HBox row1 = new HBox(8,
@@ -144,16 +147,19 @@ public class InterviewApp extends Application {
         candidateField = new TextField();
         candidateField.setPromptText("Candidate name");
         candidateField.setStyle(FORM_FONT_STYLE);
+        candidateField.getStyleClass().add("field");
         candidateField.setPrefWidth(240);
 
         jobField = new TextField();
         jobField.setPromptText("Job / role");
         jobField.setStyle(FORM_FONT_STYLE);
+        jobField.getStyleClass().add("field");
         jobField.setPrefWidth(220);
 
         companyField   = new TextField();
         companyField.setPromptText("Company");
         companyField.setStyle(FORM_FONT_STYLE);
+        companyField.getStyleClass().add("field");
         companyField.setPrefWidth(150);
 
         sexCombo = new ComboBox<>(FXCollections.observableArrayList("Male", "Female"));
@@ -184,7 +190,10 @@ public class InterviewApp extends Application {
         statusDot.setStroke(Color.GRAY);
         statusDot.setStrokeWidth(1);
 
-        sessionBtn = new Button("▶  Start Session");
+        sessionBtn = new Button("Start Session");
+        sessionBtn.setGraphic(icon("mdi2p-play"));
+        sessionBtn.setGraphicTextGap(6);
+        sessionBtn.getStyleClass().add("btn-primary");
         sessionBtn.setMinWidth(140);
         sessionBtn.setOnAction(e -> onSessionToggle());
 
@@ -194,26 +203,41 @@ public class InterviewApp extends Application {
         row3.setAlignment(Pos.CENTER_LEFT);
 
         // ── Row 4: question controls + font size ─────────────────────────────
-        newQuestionBtn = new Button("▶  New Question");
+        newQuestionBtn = new Button("New Question");
+        newQuestionBtn.setGraphic(icon("mdi2p-plus"));
+        newQuestionBtn.setGraphicTextGap(6);
+        newQuestionBtn.getStyleClass().add("btn-secondary");
         newQuestionBtn.setDisable(true);
         newQuestionBtn.setOnAction(e -> onNewQuestion());
 
-        saveSessionBtn = new Button("🗑️  Fechar Sessão");
+        saveSessionBtn = new Button("Fechar Sessão");
+        saveSessionBtn.setGraphic(icon("mdi2b-broom"));
+        saveSessionBtn.setGraphicTextGap(6);
+        saveSessionBtn.getStyleClass().add("btn-secondary");
         saveSessionBtn.setDisable(true);
         saveSessionBtn.setOnAction(e -> onSaveSession());
 
-        discardSessionBtn = new Button("❌  Descartar Sessão");
+        discardSessionBtn = new Button("Descartar Sessão");
+        discardSessionBtn.setGraphic(icon("mdi2t-trash-can-outline"));
+        discardSessionBtn.setGraphicTextGap(6);
+        discardSessionBtn.getStyleClass().add("btn-danger");
         discardSessionBtn.setDisable(true);
         discardSessionBtn.setOnAction(e -> onDiscardSession());
 
-        openSessionBtn = new Button("📂  Abrir Sessão");
+        openSessionBtn = new Button("Abrir Sessão");
+        openSessionBtn.setGraphic(icon("mdi2f-folder-open"));
+        openSessionBtn.setGraphicTextGap(6);
+        openSessionBtn.getStyleClass().add("btn-secondary");
         openSessionBtn.setOnAction(e -> onOpenSession());
 
         Label fontLabel = new Label();
         fontLabel.textProperty().bind(Bindings.concat("Fonte: ", fontSize, "px"));
+        fontLabel.getStyleClass().add("muted-label");
         Button fontDecBtn = new Button("A−");
+        fontDecBtn.getStyleClass().add("btn-ghost");
         fontDecBtn.setOnAction(e -> { if (fontSize.get() > 8) fontSize.set(fontSize.get() - 1); });
         Button fontIncBtn = new Button("A+");
+        fontIncBtn.getStyleClass().add("btn-ghost");
         fontIncBtn.setOnAction(e -> { if (fontSize.get() < 36) fontSize.set(fontSize.get() + 1); });
 
         Separator vertSep = new Separator(Orientation.VERTICAL);
@@ -298,7 +322,8 @@ public class InterviewApp extends Application {
                     candidateProvider = cProv;
                     candidateCapture  = cCap;
                     sessionRunning = true;
-                    sessionBtn.setText("⏹  Stop Session");
+                    sessionBtn.setText("Stop Session");
+                    sessionBtn.setGraphic(icon("mdi2s-stop"));
                     sessionBtn.setDisable(false);
                     statusDot.setFill(Color.RED);
                     newQuestionBtn.setDisable(false);
@@ -313,7 +338,8 @@ public class InterviewApp extends Application {
                 closeSessionTxt();
                 Platform.runLater(() -> {
                     setSessionControlsEnabled(true);
-                    sessionBtn.setText("▶  Start Session");
+                    sessionBtn.setText("Start Session");
+                    sessionBtn.setGraphic(icon("mdi2p-play"));
                     statusDot.setFill(Color.LIGHTGRAY);
                     showAlert("Falha na conexão", extractErrorDetail(ex));
                 });
@@ -345,7 +371,8 @@ public class InterviewApp extends Application {
             if (cProv != null) cProv.stop();
             Platform.runLater(() -> {
                 setSessionControlsEnabled(true);
-                sessionBtn.setText("▶  Start Session");
+                sessionBtn.setText("Start Session");
+                sessionBtn.setGraphic(icon("mdi2p-play"));
                 statusDot.setFill(Color.LIGHTGRAY);
                 // Keep save/clear and discard available so the user can review,
                 // then explicitly keep (Fechar) or delete (Descartar) the session.
@@ -403,6 +430,11 @@ public class InterviewApp extends Application {
                 "Limpar todos os painéis e preparar para a próxima entrevista?\n\n" +
                 "O arquivo de transcrição já foi salvo automaticamente em disco.");
         confirm.getButtonTypes().setAll(btnClear, btnCancel);
+        var cssUrl1 = getClass().getResource(STYLESHEET);
+        if (cssUrl1 != null) {
+            confirm.getDialogPane().getStylesheets().add(cssUrl1.toExternalForm());
+            confirm.getDialogPane().getStyleClass().add("app-dialog");
+        }
         confirm.showAndWait().ifPresent(bt -> { if (bt == btnClear) doClearSession(); });
     }
 
@@ -418,6 +450,11 @@ public class InterviewApp extends Application {
                 "Descartar a sessão atual e APAGAR o arquivo salvo em disco?\n\n" +
                 "Use quando o candidato não compareceu. Esta ação não pode ser desfeita.");
         confirm.getButtonTypes().setAll(btnDiscard, btnCancel);
+        var cssUrl2 = getClass().getResource(STYLESHEET);
+        if (cssUrl2 != null) {
+            confirm.getDialogPane().getStylesheets().add(cssUrl2.toExternalForm());
+            confirm.getDialogPane().getStyleClass().add("app-dialog");
+        }
         confirm.showAndWait().ifPresent(bt -> { if (bt == btnDiscard) doDiscardSession(); });
     }
 
@@ -619,6 +656,32 @@ public class InterviewApp extends Application {
 
     // ── UI helpers ────────────────────────────────────────────────────────
 
+    /** Loads the app stylesheet onto a scene; no-op if the resource is missing. */
+    private void applyStylesheet(Scene scene) {
+        var url = getClass().getResource(STYLESHEET);
+        if (url != null) {
+            scene.getStylesheets().add(url.toExternalForm());
+        } else {
+            log.debug("Stylesheet resource not found: {}", STYLESHEET);
+        }
+    }
+
+    /** Builds a FontIcon graphic from an Ikonli literal (e.g. "mdi2p-play"). */
+    private static FontIcon icon(String literal) {
+        FontIcon fi = new FontIcon(literal);
+        fi.setIconSize(16);
+        return fi;
+    }
+
+    /** Creates a Button with text, an icon graphic, and the given style classes. */
+    private static Button styledButton(String text, String iconLiteral, String... styleClasses) {
+        Button btn = new Button(text);
+        btn.setGraphic(icon(iconLiteral));
+        btn.setGraphicTextGap(6);
+        btn.getStyleClass().addAll(styleClasses);
+        return btn;
+    }
+
     private static ComboBox<AudioDeviceInfo> buildDeviceCombo(List<AudioDeviceInfo> devices) {
         ComboBox<AudioDeviceInfo> combo = new ComboBox<>();
         combo.getItems().addAll(devices);
@@ -633,6 +696,7 @@ public class InterviewApp extends Application {
     private static Label formLabel(String text) {
         Label l = new Label(text);
         l.setStyle(FORM_FONT_STYLE);
+        l.getStyleClass().add("form-label");
         return l;
     }
 
@@ -680,6 +744,11 @@ public class InterviewApp extends Application {
         alert.setTitle(title);
         alert.setHeaderText(null);
         alert.setContentText(message);
+        var cssUrl = getClass().getResource(STYLESHEET);
+        if (cssUrl != null) {
+            alert.getDialogPane().getStylesheets().add(cssUrl.toExternalForm());
+            alert.getDialogPane().getStyleClass().add("app-dialog");
+        }
         alert.showAndWait();
     }
 
@@ -693,7 +762,7 @@ public class InterviewApp extends Application {
         handle.setPrefHeight(8);
         handle.setMaxWidth(Double.MAX_VALUE);
         handle.setCursor(Cursor.S_RESIZE);
-        handle.setStyle("-fx-background-color: #c8c8c8;");
+        handle.getStyleClass().add("resize-handle");
 
         double[] startScreenY = {0};
         double[] startHeight  = {0};
@@ -814,29 +883,40 @@ public class InterviewApp extends Application {
             columns.setDividerPositions(0.34, 0.67);
 
             partialLabel = new Label();
-            partialLabel.setFont(Font.font(null, FontPosture.ITALIC, 12));
-            partialLabel.setTextFill(Color.GRAY);
+            partialLabel.getStyleClass().add("partial-label");
             partialLabel.setWrapText(true);
             partialLabel.setMaxWidth(Double.MAX_VALUE);
 
             // ── Buttons (with the AI star rating on the left) ──────────────────
             ratingLabel = new Label();
-            ratingLabel.setStyle("-fx-font-size: 16px; -fx-text-fill: #d4a017; -fx-font-weight: bold;");
+            ratingLabel.getStyleClass().add("rating-label");
 
             Region buttonsSpacer = new Region();
             HBox.setHgrow(buttonsSpacer, Priority.ALWAYS);
 
-            Button copyBtn = new Button("📋  Copy Analysis");
+            Button copyBtn = new Button("Copy Analysis");
+            copyBtn.setGraphic(icon("mdi2c-content-copy"));
+            copyBtn.setGraphicTextGap(6);
+            copyBtn.getStyleClass().add("btn-secondary");
             copyBtn.setOnAction(e -> onCopyAnalysis(copyBtn));
 
-            analyzeBtn = new Button("🤖  Analisar");
+            analyzeBtn = new Button("Analisar");
+            analyzeBtn.setGraphic(icon("mdi2r-robot"));
+            analyzeBtn.setGraphicTextGap(6);
+            analyzeBtn.getStyleClass().add("btn-primary");
             analyzeBtn.setOnAction(e -> analyze());
 
-            continueBtn = new Button("▶  Continue");
+            continueBtn = new Button("Continue");
+            continueBtn.setGraphic(icon("mdi2p-play"));
+            continueBtn.setGraphicTextGap(6);
+            continueBtn.getStyleClass().add("btn-secondary");
             continueBtn.setDisable(true);
             continueBtn.setOnAction(e -> resumeQuestion());
 
-            stopBtn = new Button("⏹  Stop");
+            stopBtn = new Button("Stop");
+            stopBtn.setGraphic(icon("mdi2s-stop"));
+            stopBtn.setGraphicTextGap(6);
+            stopBtn.getStyleClass().add("btn-danger");
             stopBtn.setOnAction(e -> stopQuestion(this));
 
             HBox buttons = new HBox(8,
@@ -856,7 +936,10 @@ public class InterviewApp extends Application {
                     analysisLabel, analysisArea);
             content.setPadding(new Insets(10));
 
-            titledPane = new TitledPane("Question " + number + "  🔴", content);
+            titledPane = new TitledPane("Question " + number, content);
+            FontIcon activeIcon = icon("mdi2r-record-circle");
+            activeIcon.setIconColor(Color.web("#DC2626"));
+            titledPane.setGraphic(activeIcon);
             titledPane.setExpanded(true);
             titledPane.setAnimated(true);
         }
@@ -887,7 +970,7 @@ public class InterviewApp extends Application {
 
         private Label sectionLabel(String text) {
             Label l = new Label(text);
-            l.setStyle("-fx-font-weight: bold; -fx-font-size: 11px; -fx-text-fill: #666;");
+            l.getStyleClass().add("section-label");
             return l;
         }
 
@@ -978,8 +1061,16 @@ public class InterviewApp extends Application {
             String q = questionArea.getText().trim();
             String preview = q.isEmpty() ? "" :
                     ": \"" + (q.length() > 55 ? q.substring(0, 55) + "…" : q) + "\"";
-            String indicator = active.get() ? "  🔴" : "  ✓";
-            titledPane.setText("Question " + number + preview + indicator);
+            titledPane.setText("Question " + number + preview);
+            FontIcon statusIcon;
+            if (active.get()) {
+                statusIcon = icon("mdi2r-record-circle");
+                statusIcon.setIconColor(Color.web("#DC2626"));
+            } else {
+                statusIcon = icon("mdi2c-check-circle");
+                statusIcon.setIconColor(Color.web("#2563EB"));
+            }
+            titledPane.setGraphic(statusIcon);
         }
 
         // Sends question + expected answer + candidate transcription to Groq and
@@ -1023,7 +1114,8 @@ public class InterviewApp extends Application {
 
         private void resetAnalyzeBtn() {
             analyzeBtn.setDisable(false);
-            analyzeBtn.setText("🤖  Analisar");
+            analyzeBtn.setText("Analisar");
+            analyzeBtn.setGraphic(icon("mdi2r-robot"));
         }
 
         private void onCopyAnalysis(Button btn) {
@@ -1034,7 +1126,10 @@ public class InterviewApp extends Application {
             Clipboard.getSystemClipboard().setContent(cc);
             btn.setText("✓  Copied!");
             PauseTransition p = new PauseTransition(Duration.seconds(1.5));
-            p.setOnFinished(e -> btn.setText("📋  Copy Analysis"));
+            p.setOnFinished(e -> {
+                btn.setText("Copy Analysis");
+                btn.setGraphic(icon("mdi2c-content-copy"));
+            });
             p.play();
         }
     }

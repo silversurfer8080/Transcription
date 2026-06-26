@@ -57,3 +57,7 @@ PROJECT_SPEC.md
 
 ### Claude Code local settings ###
 .claude/
+
+### Delivery pipeline work artifacts ###
+.pipeline/*
+!.pipeline/README.md
