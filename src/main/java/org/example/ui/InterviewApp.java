@@ -94,6 +94,7 @@ public class InterviewApp extends Application {
     private Button openSessionBtn;
     private VBox questionsBox;
     private ScrollPane questionsScroll;
+    private TextArea jobDescArea;   // session-level full job description (collapsible top panel)
 
     @Override
     public void start(Stage stage) {
@@ -257,7 +258,20 @@ public class InterviewApp extends Application {
         questionsScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
         VBox.setVgrow(questionsScroll, Priority.ALWAYS);
 
-        VBox root = new VBox(controls, new Separator(), questionsScroll);
+        // ── Job description collapsible panel (top of window) ───────────────
+        jobDescArea = new TextArea();
+        jobDescArea.setPromptText("Cole aqui a descrição da vaga (Job Description)…");
+        jobDescArea.setWrapText(true);
+        jobDescArea.setPrefRowCount(4);
+        jobDescArea.setStyle(FORM_FONT_STYLE);
+
+        TitledPane jobDescPane = new TitledPane("Descrição da Vaga (Job Description)", jobDescArea);
+        jobDescPane.setExpanded(false);
+        jobDescPane.setAnimated(true);
+        jobDescPane.setGraphic(icon("mdi2c-comment-question-outline"));
+
+        VBox root = new VBox(jobDescPane, controls, new Separator(), questionsScroll);
+        VBox.setMargin(jobDescPane, new Insets(10, 10, 0, 10));
         VBox.setVgrow(questionsScroll, Priority.ALWAYS);
         return root;
     }
@@ -490,6 +504,7 @@ public class InterviewApp extends Application {
         candidateField.clear();
         jobField.setDisable(false);
         jobField.clear();
+        jobDescArea.clear();
         sexCombo.setDisable(false);
         sexCombo.getSelectionModel().clearSelection();
         sexCombo.setValue(null);
@@ -807,6 +822,30 @@ public class InterviewApp extends Application {
         return text.replaceAll("(?im)^\\s*RATING:\\s*\\d+\\s*/\\s*\\d+\\s*$", "").trim();
     }
 
+    private static final Pattern FOLLOWUP_HEADER_PATTERN =
+            Pattern.compile("(?im)^\\s*FOLLOW-?\\s?UP\\s+QUESTIONS\\s*:.*$");
+
+    private static List<String> parseFollowUps(String text) {
+        Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
+        if (!m.find()) return List.of();
+        String after = text.substring(m.end());
+        List<String> result = new ArrayList<>();
+        for (String line : after.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            if (trimmed.toLowerCase().startsWith("rating:")) break;
+            String stripped = trimmed.replaceFirst("^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "").trim();
+            if (!stripped.isEmpty()) result.add(stripped);
+        }
+        return result;
+    }
+
+    private static String stripFollowUpSection(String text) {
+        Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
+        if (m.find()) return text.substring(0, m.start());
+        return text;
+    }
+
     private static String renderStars(int score, int max) {
         if (score < 0 || max <= 0) return "";
         int s = Math.max(0, Math.min(score, max));
@@ -848,6 +887,8 @@ public class InterviewApp extends Application {
         private TextArea answerArea;
         private TextArea expectedArea;
         private TextArea analysisArea;
+        private VBox     followUpBox;
+        private TextArea followUpArea;
         private Label    partialLabel;
         private Label    ratingLabel;
         private Button   analyzeBtn;
@@ -928,11 +969,21 @@ public class InterviewApp extends Application {
             Label analysisLabel = sectionLabel("ANÁLISE DA IA");
             analysisArea = transcriptArea(6, "A análise da IA aparecerá aqui…");
 
+            // ── Follow-up questions section (hidden until populated) ─────────
+            Label followUpLabel = sectionLabel("PERGUNTAS DE FOLLOW-UP");
+            followUpLabel.setGraphic(icon("mdi2c-comment-question-outline"));
+            followUpLabel.setGraphicTextGap(6);
+            followUpArea = transcriptArea(3, "");
+            followUpBox = new VBox(6, followUpLabel, followUpArea);
+            followUpBox.setVisible(false);
+            followUpBox.setManaged(false);
+
             VBox content = new VBox(6,
                     wrapResizableRow(columns, 150),
                     partialLabel,
                     buttons,
                     new Separator(),
+                    followUpBox,
                     analysisLabel, analysisArea);
             content.setPadding(new Insets(10));
 
@@ -1083,6 +1134,7 @@ public class InterviewApp extends Application {
             String name      = candidateField.getText().trim();
             String sex       = sexCombo.getValue();   // "Male" / "Female" / null
             int    scale     = "10".equals(scaleCombo.getValue()) ? 10 : 5;
+            String jobDesc   = jobDescArea.getText().trim();
 
             if (key.isEmpty())       { showAlert("Groq API Key ausente", "Informe a Groq API key no campo \"Groq\" no topo."); return; }
             if (question.isEmpty())  { showAlert("Pergunta vazia",  "Preencha ou cole a pergunta na coluna QUESTION."); return; }
@@ -1093,21 +1145,24 @@ public class InterviewApp extends Application {
             analyzeBtn.setText("Analisando…");
             analysisArea.setText("");
             ratingLabel.setText("");
+            showFollowUps(List.of());
 
             Thread.ofVirtual().name("answer-evaluate-q" + number).start(() -> {
                 try {
-                    String result = GroqClient.evaluateAnswer(key, question, expected, candidate, name, sex, scale);
-                    int[] rating  = parseRating(result, scale);
-                    String body   = stripRatingLine(result);
+                    String result     = GroqClient.evaluateAnswer(key, question, expected, candidate, name, sex, scale, jobDesc);
+                    int[] rating      = parseRating(result, scale);
+                    List<String> followUps = parseFollowUps(result);
+                    String body       = stripRatingLine(stripFollowUpSection(result));
                     Platform.runLater(() -> {
                         analysisArea.setText(body);
                         ratingLabel.setText(renderStars(rating[0], rating[1]));
+                        showFollowUps(followUps);
                         resetAnalyzeBtn();
                     });
                 } catch (Exception ex) {
                     log.error("Per-question evaluation failed (q{})", number, ex);
                     String detail = translateGroqError(ex.getMessage());
-                    Platform.runLater(() -> { analysisArea.setText("Erro: " + detail); resetAnalyzeBtn(); });
+                    Platform.runLater(() -> { analysisArea.setText("Erro: " + detail); showFollowUps(List.of()); resetAnalyzeBtn(); });
                 }
             });
         }
@@ -1116,6 +1171,23 @@ public class InterviewApp extends Application {
             analyzeBtn.setDisable(false);
             analyzeBtn.setText("Analisar");
             analyzeBtn.setGraphic(icon("mdi2r-robot"));
+        }
+
+        private void showFollowUps(List<String> qs) {
+            if (qs == null || qs.isEmpty()) {
+                followUpArea.clear();
+                followUpBox.setVisible(false);
+                followUpBox.setManaged(false);
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < qs.size(); i++) {
+                if (i > 0) sb.append('\n');
+                sb.append(i + 1).append(". ").append(qs.get(i));
+            }
+            followUpArea.setText(sb.toString());
+            followUpBox.setVisible(true);
+            followUpBox.setManaged(true);
         }
 
         private void onCopyAnalysis(Button btn) {

@@ -20,16 +20,17 @@ public class GroqClient {
 
     public static String evaluateAnswer(String apiKey, String question,
                                         String expectedAnswer, String candidateAnswer,
-                                        String candidateName, String gender, int starScale)
-            throws Exception {
+                                        String candidateName, String gender, int starScale,
+                                        String jobDescription) throws Exception {
         return call(apiKey, buildEvaluationPrompt(
-                question, expectedAnswer, candidateAnswer, candidateName, gender, starScale));
+                question, expectedAnswer, candidateAnswer, candidateName, gender, starScale,
+                jobDescription));
     }
 
     private static String call(String apiKey, String userPrompt) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", MODEL);
-        body.put("max_tokens", 1024);
+        body.put("max_tokens", 1280);
 
         ArrayNode messages = body.putArray("messages");
         ObjectNode msg = messages.addObject();
@@ -63,7 +64,8 @@ public class GroqClient {
 
     static String buildEvaluationPrompt(String question, String expectedAnswer,
                                         String candidateAnswer, String candidateName,
-                                        String gender, int starScale) {
+                                        String gender, int starScale,
+                                        String jobDescription) {
         int max = (starScale == 10) ? 10 : 5;
         String pronouns = "they/them";
         if (gender != null) {
@@ -75,6 +77,13 @@ public class GroqClient {
                 ? "Refer to the candidate using the pronouns " + pronouns + "."
                 : "The candidate's name is " + name + "; refer to them as " + name
                   + " and use " + pronouns + " pronouns.";
+
+        String jobSection = (jobDescription == null || jobDescription.trim().isEmpty())
+                ? "No job description was provided for the role; judge the answer using general"
+                  + " expectations for this kind of question and role."
+                : "Job description for the role the candidate is interviewing for"
+                  + " (weigh the answer against what this role actually requires):\n"
+                  + jobDescription.trim();
 
         String expected = (expectedAnswer == null) ? "" : expectedAnswer.trim();
         String expectedSection = expected.isEmpty()
@@ -92,6 +101,8 @@ public class GroqClient {
 
         return """
                 You are an experienced technical interviewer assessing a candidate's answer.
+
+                %s
 
                 %s
 
@@ -121,9 +132,14 @@ public class GroqClient {
                 %s
 
                 Keep the tone professional and direct — not harsh. Be kind and bear in mind this \
-                is an interview, but do not be overly kind. Respond in English. After the \
-                assessment, output the score on its own very last line in exactly this format, \
-                with no extra words: RATING: n/%d
-                """.formatted(whoLine, question, expectedSection, candidateAnswer, scaleGuide, max);
+                is an interview, but do not be overly kind. Respond in English. After the prose \
+                assessment, provide 2 to 3 follow-up questions the interviewer could ask to probe \
+                the candidate more deeply, targeting gaps, vague spots, or claims worth pressing \
+                on, kept relevant to the role. Output them in a dedicated section starting with a \
+                line containing exactly FOLLOW-UP QUESTIONS: followed by each follow-up question \
+                on its own line prefixed with "- ". After the follow-up questions block, output \
+                the score on its own very last line in exactly this format, with no extra words: \
+                RATING: n/%d
+                """.formatted(whoLine, jobSection, question, expectedSection, candidateAnswer, scaleGuide, max);
     }
 }
