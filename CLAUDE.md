@@ -15,7 +15,7 @@ The project is also a deliberate exercise in **Java 21 virtual threads**, so fav
 
 **Phase 1 (Foundation) is complete.** Subsequent phases — see `PROJECT_SPEC.md` §"Plano de implementação por fases":
 
-- Phase 2: `SpeechToTextProvider` interface + `DeepgramStreamingProvider` (WebSocket to `wss://api.deepgram.com/v1/listen`) + minimal JavaFX UI for the candidate channel.
+- Phase 2: `SpeechToTextProvider` interface + `GroqWhisperProvider` (batch Whisper over HTTPS to Groq's free tier — replaced the original Deepgram WebSocket provider, which was removed once its free credits ran out) + minimal JavaFX UI for the candidate channel.
 - Phase 3: dual capture (own mic + candidate) + dual-pane UI + per-session JSON transcript.
 - Phase 4: rolling in-memory buffer, click-to-mark span, Anthropic Claude analysis, TTS, structured per-session output under `~/interview-assistant-data/sessions/<date>_<candidate>/`.
 - Phase 5: AssemblyAI provider, local Vosk fallback, JNativeHook hotkeys, always-on-top.
@@ -51,7 +51,7 @@ The two streams (interviewer mic / candidate playback) are kept physically separ
 
 ### Canonical audio format
 
-`Main.DEFAULT_FORMAT` — **PCM signed, 16 kHz, 16-bit, mono, little-endian** — is the project-wide contract. Picked because Deepgram, AssemblyAI, Vosk and whisper.cpp all accept it natively. Don't change it lightly: every downstream component (STT providers, WAV writer, future rolling buffer) assumes this shape.
+`Main.DEFAULT_FORMAT` — **PCM signed, 16 kHz, 16-bit, mono, little-endian** — is the project-wide contract. Picked because Groq Whisper, AssemblyAI, Vosk and whisper.cpp all accept it natively. Don't change it lightly: every downstream component (STT providers, WAV writer, future rolling buffer) assumes this shape.
 
 ### Capture pipeline
 
@@ -79,7 +79,7 @@ interface SpeechToTextProvider {
 }
 ```
 
-`TranscriptEvent` carries: partial-vs-final flag, timestamp, confidence, channel id. Concrete providers live behind this interface so vendor lock-in stays out of the rest of the app — Deepgram first, AssemblyAI next, Vosk/whisper.cpp later as offline fallbacks.
+`TranscriptEvent` carries: partial-vs-final flag, timestamp, confidence, channel id. Concrete providers live behind this interface so vendor lock-in stays out of the rest of the app — `GroqWhisperProvider` is the current default (batch Whisper, Groq free tier); AssemblyAI and offline Vosk/whisper.cpp are candidate fallbacks. Note `GroqWhisperProvider` is **batch, not streaming**: it buffers ~5 s windows and emits only final events (no interim/partial), so anything reading transcripts must not depend on partials.
 
 ### Dependencies already on the classpath
 

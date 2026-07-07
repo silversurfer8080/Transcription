@@ -29,7 +29,8 @@ import org.example.audio.AudioCapture;
 import org.example.audio.AudioDeviceInfo;
 import org.example.audio.AudioDevices;
 import org.example.llm.GroqClient;
-import org.example.stt.DeepgramStreamingProvider;
+import org.example.stt.GroqWhisperProvider;
+import org.example.stt.SpeechToTextProvider;
 import org.example.stt.TranscriptEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,13 +64,10 @@ public class InterviewApp extends Application {
 
     // ---- session state (FX thread only, except activeQuestion which is volatile) ----
     private AudioCapture candidateCapture;
-    private DeepgramStreamingProvider candidateProvider;
+    private SpeechToTextProvider candidateProvider;
     private boolean sessionRunning = false;
     private int questionCounter = 0;
     private Path sessionTxtPath;   // rewritten in full on each candidate final / stop
-    // Counts how many providers are currently reconnecting; drives the status dot colour
-    private final java.util.concurrent.atomic.AtomicInteger reconnectingProviders =
-            new java.util.concurrent.atomic.AtomicInteger(0);
     private volatile QuestionPanel activeQuestion = null;
     private final List<QuestionPanel> questionPanels = new ArrayList<>();
     private Stage primaryStage;
@@ -78,8 +76,7 @@ public class InterviewApp extends Application {
     private final IntegerProperty fontSize = new SimpleIntegerProperty(14);
 
     // ---- UI controls (interview tab) ----
-    private PasswordField apiKeyField;
-    private PasswordField groqKeyField;   // for per-question AI evaluation (Groq)
+    private PasswordField groqKeyField;   // Groq key — STT (Whisper) + per-question AI evaluation
     private TextField companyField;
     private TextField candidateField;
     private TextField jobField;
@@ -114,15 +111,7 @@ public class InterviewApp extends Application {
     }
 
     private Node buildInterviewTabContent() {
-        // ── Row 1: API keys + power button ──────────────────────────────────
-        apiKeyField = new PasswordField();
-        apiKeyField.setPromptText("Deepgram API key");
-        apiKeyField.setStyle(FORM_FONT_STYLE);
-        apiKeyField.getStyleClass().add("field");
-        HBox.setHgrow(apiKeyField, Priority.ALWAYS);
-        String envKey = System.getenv("DEEPGRAM_API_KEY");
-        if (envKey != null && !envKey.isBlank()) apiKeyField.setText(envKey);
-
+        // ── Row 1: Groq key + power button ──────────────────────────────────
         groqKeyField = new PasswordField();
         groqKeyField.setPromptText("Groq API key  (gsk_...)");
         groqKeyField.setStyle(FORM_FONT_STYLE);
@@ -138,7 +127,6 @@ public class InterviewApp extends Application {
         powerBtn.setOnAction(e -> { if (sessionRunning) stopSession(); Platform.exit(); });
 
         HBox row1 = new HBox(8,
-                formLabel("Deepgram:"), apiKeyField,
                 formLabel("Groq:"), groqKeyField,
                 powerBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
@@ -283,8 +271,11 @@ public class InterviewApp extends Application {
     }
 
     private void startSession() {
-        String apiKey = apiKeyField.getText().trim();
-        if (apiKey.isEmpty()) { showAlert("API Key ausente", "Informe a Deepgram API key."); return; }
+        String groqKey = groqKeyField.getText().trim();
+        if (groqKey.isEmpty()) {
+            showAlert("Chave ausente", "Informe a Groq API key — ela é usada para a transcrição.");
+            return;
+        }
 
         String company   = companyField.getText().trim();
         String candidate = candidateField.getText().trim();
@@ -312,18 +303,17 @@ public class InterviewApp extends Application {
         sessionBtn.setText("Connecting…");
         statusDot.setFill(Color.YELLOW);
 
-        reconnectingProviders.set(0);
-
         Thread.ofVirtual().name("start-session").start(() -> {
             try {
-                // Only the candidate channel is captured and streamed to Deepgram.
-                DeepgramStreamingProvider cProv = new DeepgramStreamingProvider(apiKey, "candidate");
-
-                cProv.setConnectionCallbacks(
-                        () -> { reconnectingProviders.incrementAndGet();
-                                Platform.runLater(() -> statusDot.setFill(Color.ORANGE)); },
-                        () -> { if (reconnectingProviders.decrementAndGet() == 0)
-                                Platform.runLater(() -> statusDot.setFill(Color.RED)); });
+                // Only the candidate channel is captured and transcribed.
+                // Batch Whisper on Groq's free tier: buffers ~5 s windows and POSTs
+                // them. A failed POST (bad key, rate limit) is surfaced on the
+                // status dot via the error listener.
+                GroqWhisperProvider cProv = new GroqWhisperProvider(groqKey, "candidate");
+                cProv.setErrorListener(msg -> Platform.runLater(() -> {
+                    statusDot.setFill(Color.ORANGE);
+                    log.warn("Groq STT: {}", msg);
+                }));
 
                 cProv.start(Main.DEFAULT_FORMAT, this::onCandidateEvent);
 
@@ -377,7 +367,7 @@ public class InterviewApp extends Application {
         questionPanels.forEach(p -> p.setContinueEnabled(false));
 
         AudioCapture cCap = candidateCapture;
-        DeepgramStreamingProvider cProv = candidateProvider;
+        SpeechToTextProvider cProv = candidateProvider;
         candidateCapture = null; candidateProvider = null;
 
         Thread.ofVirtual().name("stop-session").start(() -> {
@@ -725,7 +715,7 @@ public class InterviewApp extends Application {
     }
 
     private void setSessionControlsEnabled(boolean enabled) {
-        apiKeyField.setDisable(!enabled);
+        groqKeyField.setDisable(!enabled);
         companyField.setDisable(!enabled);
         candidateField.setDisable(!enabled);
         jobField.setDisable(!enabled);

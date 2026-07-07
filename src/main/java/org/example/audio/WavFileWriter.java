@@ -94,12 +94,26 @@ public class WavFileWriter implements AutoCloseable {
                     "WAV data exceeds 2 GB limit (" + dataBytesWritten + " bytes written). "
                     + "The file is complete but its header cannot be patched correctly.");
         }
+        raf.seek(0);
+        raf.write(wavHeader(format, (int) dataBytesWritten));
+    }
+
+    /**
+     * Builds the 44-byte canonical WAV/RIFF header for {@code dataByteLength}
+     * bytes of PCM in the given format (little-endian PCM).
+     *
+     * <p>Exposed as a static helper so callers that already hold a short PCM
+     * clip in memory — e.g. a chunked STT provider that POSTs a few seconds of
+     * audio to a batch transcription API — can frame it as a self-contained WAV
+     * without touching the filesystem.
+     */
+    public static byte[] wavHeader(AudioFormat format, int dataByteLength) {
         int channels = format.getChannels();
         int sampleRate = (int) format.getSampleRate();
         int bitsPerSample = format.getSampleSizeInBits();
         int byteRate = sampleRate * channels * bitsPerSample / 8;
         int blockAlign = channels * bitsPerSample / 8;
-        long fileSizeMinus8 = (HEADER_SIZE - 8L) + dataBytesWritten;
+        long fileSizeMinus8 = (HEADER_SIZE - 8L) + dataByteLength;
 
         ByteBuffer bb = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         bb.put("RIFF".getBytes());
@@ -114,10 +128,8 @@ public class WavFileWriter implements AutoCloseable {
         bb.putShort((short) blockAlign);
         bb.putShort((short) bitsPerSample);
         bb.put("data".getBytes());
-        bb.putInt((int) dataBytesWritten);
-
-        raf.seek(0);
-        raf.write(bb.array());
+        bb.putInt(dataByteLength);
+        return bb.array();
     }
 
     private static void validateFormat(AudioFormat fmt) {
