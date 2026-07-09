@@ -194,6 +194,21 @@ class WavFileWriterTest {
         assertEquals(4,       readShortLE(32));    // blockAlign = 2ch * 2bytes
     }
 
+    // ── Static header helper (used by in-memory callers, e.g. chunked STT) ──────
+
+    @Test
+    void wavHeader_buildsStandalone44ByteHeader() {
+        int dataLen = 3200;
+        ByteBuffer bb = ByteBuffer.wrap(WavFileWriter.wavHeader(PCM_16KHZ_MONO, dataLen))
+                .order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(44, bb.capacity());
+        assertEquals("RIFF", new String(bb.array(), 0, 4));
+        assertEquals("WAVE", new String(bb.array(), 8, 4));
+        assertEquals(36 + dataLen, bb.getInt(4));   // RIFF chunk size
+        assertEquals(16_000, bb.getInt(24));         // sample rate
+        assertEquals(dataLen, bb.getInt(40));        // data chunk size
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     @Test

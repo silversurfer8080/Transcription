@@ -30,7 +30,8 @@ class TranscriptEventTest {
 
     @Test
     void confidence_negativeOne_isValidSentinelForMissingConfidence() {
-        // DeepgramStreamingProvider uses -1 when the JSON confidence field is absent
+        // Providers use -1 when the source reports no confidence value
+        // (e.g. GroqWhisperProvider, whose response carries no per-utterance score)
         var event = new TranscriptEvent("text", false, -1.0, "mic");
         assertEquals(-1.0, event.confidence(), 1e-9);
     }
