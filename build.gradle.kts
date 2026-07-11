@@ -40,6 +40,10 @@ dependencies {
     implementation("org.kordamp.ikonli:ikonli-javafx:12.3.1")
     implementation("org.kordamp.ikonli:ikonli-materialdesign2-pack:12.3.1")
 
+    // Offline speech-to-text (Vosk) — bundles the JNI native libs for Win/macOS/Linux
+    // inside the jar, so no manual native build is needed. Requires a downloaded model.
+    implementation("com.alphacephei:vosk:0.3.45")
+
     testImplementation(platform("org.junit:junit-bom:5.10.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
 }

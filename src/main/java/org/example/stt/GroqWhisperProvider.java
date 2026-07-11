@@ -1,12 +1,9 @@
 package org.example.stt;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.example.audio.WavFileWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.sound.sampled.AudioFormat;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -16,41 +13,27 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 
 /**
  * Free-tier speech-to-text via Groq's Whisper endpoint
  * ({@code POST /openai/v1/audio/transcriptions}).
  *
- * <h3>Streaming contract over a batch API</h3>
- * <p>A streaming STT backend (WebSocket) emits interim + final results as you
- * speak. Groq's Whisper is instead a <b>batch</b> file API: you POST a complete
- * audio clip and get one transcript back. To fit the streaming
- * {@link SpeechToTextProvider} contract we buffer incoming PCM and, every
- * {@link #flushMillis} milliseconds, wrap the accumulated audio in an in-memory
- * WAV and POST it. Each response is emitted as a single <b>final</b>
- * {@link TranscriptEvent} — there are no interim/partial events, so the UI's
- * partial label simply stays empty.
+ * <p>Groq's Whisper is a <b>batch</b> file API, so this provider extends
+ * {@link BatchWindowSttProvider}, which handles the buffering, ~5 s windowing,
+ * silence gating and flush threading. Here we implement only the provider-specific
+ * multipart POST.
  *
- * <p>The trade-off is latency (text appears one window + one round-trip after
- * it was spoken) and occasional word clipping at window boundaries, in exchange
- * for zero cost on Groq's free tier.
+ * <p>Known limitation you may hit on the free tier (2,000 requests/day, 7,200
+ * audio-seconds/hour): heavy days exhaust the budget and return HTTP 429. Whisper
+ * also occasionally hallucinates caption-like phrases ("Thank you.") on near-silent
+ * audio — the {@link #SILENCE_PEAK} gate suppresses the pure-silence case, but a
+ * fully offline engine (Vosk) avoids this class of artifact entirely.
  *
- * <h3>Silence gating</h3>
- * <p>Whisper is known to hallucinate phrases ("Thank you.", "Thanks for
- * watching.") when fed pure silence, and every POST spends part of the free
- * tier's daily request budget. So a window whose peak amplitude is below
- * {@link #SILENCE_PEAK} is dropped without a request.
- *
- * <h3>Threading model</h3>
- * <p>{@link #sendAudioChunk} only appends to an in-memory buffer under a short
- * lock (never blocks on I/O). A dedicated flush virtual thread wakes on the
- * interval, atomically swaps out the buffer, and performs the (blocking) HTTP
- * POST off the capture thread. Flushes are sequential, so transcripts are
- * emitted in the order they were spoken.
+ * <p>Pure helpers ({@link #buildMultipartBody}, {@link #extractText},
+ * {@link #friendlyError}, and the inherited {@code isSilent}) are package-private so
+ * unit tests can exercise them without a network call.
  */
-public class GroqWhisperProvider implements SpeechToTextProvider {
+public class GroqWhisperProvider extends BatchWindowSttProvider {
 
     private static final Logger log = LoggerFactory.getLogger(GroqWhisperProvider.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -59,31 +42,10 @@ public class GroqWhisperProvider implements SpeechToTextProvider {
     private static final String DEFAULT_MODEL = "whisper-large-v3-turbo";
     private static final long DEFAULT_FLUSH_MS = 5_000;
 
-    // 16-bit sample peak below which a whole window is treated as silence and
-    // NOT sent — protects both Whisper accuracy (no silence hallucinations) and
-    // the free-tier 2000-requests/day budget. ~500 sits above typical room noise
-    // but well below speech.
-    private static final int SILENCE_PEAK = 500;
-
-    // Skip windows shorter than ~0.25 s of audio (8000 bytes @ 16 kHz/16-bit/mono):
-    // nothing worth a request, and Whisper needs a little context to be useful.
-    private static final int MIN_BYTES = 8_000;
-
     private final String apiKey;
-    private final String channelId;
     private final String model;
     private final String language;   // ISO code (e.g. "en"); null/blank → Whisper auto-detects
-    private final long flushMillis;
-
-    private AudioFormat format;
-    private Consumer<TranscriptEvent> onResult;
-    private Consumer<String> onError;   // optional; friendly one-line messages for the UI
     private HttpClient httpClient;
-    private Thread flushThread;
-
-    private final Object bufLock = new Object();
-    private ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public GroqWhisperProvider(String apiKey, String channelId) {
         this(apiKey, channelId, "en", DEFAULT_MODEL, DEFAULT_FLUSH_MS);
@@ -91,95 +53,19 @@ public class GroqWhisperProvider implements SpeechToTextProvider {
 
     public GroqWhisperProvider(String apiKey, String channelId,
                                String language, String model, long flushMillis) {
+        super(channelId, flushMillis);
         this.apiKey = apiKey;
-        this.channelId = channelId;
         this.language = language;
         this.model = model;
-        this.flushMillis = flushMillis;
     }
 
-    /** Optional: receive friendly error strings (bad key, rate limit, network) for the UI. */
-    public void setErrorListener(Consumer<String> onError) {
-        this.onError = onError;
-    }
+    @Override protected String providerName() { return "Groq Whisper provider"; }
+    @Override protected String threadName()   { return "groq-whisper-" + channelId; }
+    @Override protected void onStart()        { this.httpClient = HttpClient.newHttpClient(); }
+    @Override protected void onStop()         { if (httpClient != null) httpClient.close(); }
 
     @Override
-    public void start(AudioFormat format, Consumer<TranscriptEvent> onResult) {
-        if (!running.compareAndSet(false, true)) {
-            throw new IllegalStateException("GroqWhisperProvider already started");
-        }
-        this.format = format;
-        this.onResult = onResult;
-        this.httpClient = HttpClient.newHttpClient();
-        this.flushThread = Thread.ofVirtual()
-                .name("groq-whisper-" + channelId)
-                .start(this::runFlushLoop);
-        log.info("Groq Whisper provider started (channel={}, model={}, window={}ms)",
-                channelId, model, flushMillis);
-    }
-
-    @Override
-    public void sendAudioChunk(byte[] pcmData) {
-        if (!running.get()) return;
-        synchronized (bufLock) {
-            buffer.write(pcmData, 0, pcmData.length);
-        }
-    }
-
-    @Override
-    public void stop() {
-        if (!running.compareAndSet(true, false)) return;
-
-        if (flushThread != null) {
-            flushThread.interrupt();
-            try { flushThread.join(3_000); }
-            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        }
-        // Transcribe whatever tail accumulated after the last interval fired.
-        try { flushOnce(); }
-        catch (Exception e) { log.warn("Final Groq flush failed (channel={}): {}", channelId, e.getMessage()); }
-
-        if (httpClient != null) httpClient.close();
-        log.info("Groq Whisper provider stopped (channel={})", channelId);
-    }
-
-    // ── Flush loop (virtual thread) ───────────────────────────────────────
-
-    private void runFlushLoop() {
-        while (running.get()) {
-            try {
-                Thread.sleep(flushMillis);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;   // stop() performs the final flush
-            }
-            try {
-                flushOnce();
-            } catch (Exception e) {
-                log.error("Groq flush error (channel={}): {}", channelId, e.getMessage());
-            }
-        }
-    }
-
-    /** Atomically drains the buffer and, if it holds speech, transcribes it. */
-    private void flushOnce() throws Exception {
-        byte[] pcm;
-        synchronized (bufLock) {
-            if (buffer.size() < MIN_BYTES) return;
-            pcm = buffer.toByteArray();
-            buffer.reset();
-        }
-        if (isSilent(pcm)) {
-            log.debug("Skipping silent {}-byte window (channel={})", pcm.length, channelId);
-            return;
-        }
-        String text = transcribe(pcm);
-        if (text != null && !text.isBlank()) {
-            onResult.accept(new TranscriptEvent(text.trim(), true, -1, channelId));
-        }
-    }
-
-    private String transcribe(byte[] pcm) throws Exception {
+    protected String transcribe(byte[] pcm) throws Exception {
         byte[] wav = toWav(pcm);
         String boundary = "----GroqWhisper" + UUID.randomUUID();
         byte[] body = buildMultipartBody(boundary, "audio.wav", wav, model, language);
@@ -197,16 +83,8 @@ public class GroqWhisperProvider implements SpeechToTextProvider {
         }
         String msg = friendlyError(response.statusCode(), response.body());
         log.warn("Groq transcription failed (channel={}): {}", channelId, msg);
-        if (onError != null) onError.accept(msg);
+        reportError(msg);
         return null;
-    }
-
-    private byte[] toWav(byte[] pcm) {
-        byte[] header = WavFileWriter.wavHeader(format, pcm.length);
-        byte[] out = new byte[header.length + pcm.length];
-        System.arraycopy(header, 0, out, 0, header.length);
-        System.arraycopy(pcm, 0, out, header.length, pcm.length);
-        return out;
     }
 
     // ── Pure helpers (package-private for testing) ────────────────────────
@@ -254,15 +132,6 @@ public class GroqWhisperProvider implements SpeechToTextProvider {
             log.error("Failed to parse Groq transcription response", e);
             return "";
         }
-    }
-
-    /** True when the loudest 16-bit little-endian sample is below the silence floor. */
-    static boolean isSilent(byte[] pcm16le) {
-        for (int i = 0; i + 1 < pcm16le.length; i += 2) {
-            int sample = (short) ((pcm16le[i] & 0xFF) | (pcm16le[i + 1] << 8));
-            if (Math.abs(sample) >= SILENCE_PEAK) return false;
-        }
-        return true;
     }
 
     static String friendlyError(int status, String body) {
