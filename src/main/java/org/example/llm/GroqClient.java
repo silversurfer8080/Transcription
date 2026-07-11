@@ -48,7 +48,12 @@ public class GroqClient {
     private static String call(LlmProvider provider, String apiKey, String userPrompt) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", provider.defaultModel());
-        body.put("max_tokens", 1280);
+        body.put("max_tokens", provider.maxTokens());
+        // Disable/limit provider "thinking" so reasoning tokens don't consume the whole
+        // budget and truncate the trailing RATING/follow-up section the parsers need.
+        if (provider.reasoningEffort() != null) {
+            body.put("reasoning_effort", provider.reasoningEffort());
+        }
 
         ArrayNode messages = body.putArray("messages");
         ObjectNode msg = messages.addObject();

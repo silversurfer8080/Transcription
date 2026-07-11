@@ -38,4 +38,29 @@ class LlmProviderTest {
         assertTrue(LlmProvider.GEMINI.endpoint().contains("generativelanguage.googleapis.com"));
         assertTrue(LlmProvider.CEREBRAS.endpoint().contains("api.cerebras.ai"));
     }
+
+    @Test
+    void everyProvider_declaresPositiveTokenBudget() {
+        for (LlmProvider p : LlmProvider.values()) {
+            assertTrue(p.maxTokens() > 0, p + " must declare a positive max-tokens budget");
+        }
+    }
+
+    @Test
+    void thinkingModels_disableOrLimitReasoning_soTheRatingTailSurvives() {
+        // Gemini 2.5 Flash and GPT-OSS are reasoning models: without capping reasoning
+        // the trailing RATING/follow-up section gets truncated (regression from live test).
+        assertEquals("none", LlmProvider.GEMINI.reasoningEffort(),
+                "Gemini must fully disable thinking via reasoning_effort=none");
+        assertNotNull(LlmProvider.CEREBRAS.reasoningEffort(),
+                "Cerebras (GPT-OSS) must limit reasoning so output isn't truncated");
+        assertTrue(LlmProvider.CEREBRAS.maxTokens() >= LlmProvider.GROQ.maxTokens(),
+                "Reasoning models need at least as much headroom as the non-thinking baseline");
+    }
+
+    @Test
+    void nonThinkingModel_omitsReasoningEffort() {
+        assertNull(LlmProvider.GROQ.reasoningEffort(),
+                "Llama 3.3 is not a thinking model — reasoning_effort must be omitted");
+    }
 }
