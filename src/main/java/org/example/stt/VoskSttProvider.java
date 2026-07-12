@@ -23,10 +23,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * for Whisper's "thank you" silence hallucinations (Vosk only emits what it hears).
  *
  * <p>Vosk is a true streaming recognizer: PCM is fed directly and it finalizes a
- * result at each end-of-utterance (a natural pause). To preserve the existing
- * {@link SpeechToTextProvider} contract — the rest of the app expects <b>final
- * events only</b> — this provider emits one final {@link TranscriptEvent} per
- * finalized utterance and does not surface interim partials.
+ * result at each end-of-utterance (a natural pause). This provider emits an interim
+ * (non-final) {@link TranscriptEvent} whenever the running hypothesis changes — so
+ * the UI's partial label streams text live instead of waiting seconds for the
+ * utterance to close — plus one <b>final</b> event per finalized utterance, which is
+ * what gets committed to the answer area and persisted. (The batch HTTP providers
+ * only ever emit finals; only Vosk surfaces partials.)
  *
  * <p>The model must match the capture format (16 kHz mono, i.e. {@code Main.DEFAULT_FORMAT}).
  * Loading a model costs hundreds of MB and seconds of time, so models are cached
@@ -52,6 +54,7 @@ public class VoskSttProvider implements SpeechToTextProvider {
     private Consumer<TranscriptEvent> onResult;
     private Consumer<String> onError;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private String lastPartial = "";   // dedupe: only emit a partial when it changes
 
     public VoskSttProvider(String modelPath, String channelId) {
         this.modelPath = modelPath;
@@ -92,8 +95,15 @@ public class VoskSttProvider implements SpeechToTextProvider {
             // acceptWaveForm returns true when an utterance just finalized.
             if (r.acceptWaveForm(pcmData, pcmData.length)) {
                 emitFinal(r.getResult());
+            } else {
+                // Interim partial: emit live so the UI's partial label updates as the
+                // candidate speaks, instead of waiting seconds for the utterance to end.
+                String partial = field(r.getPartialResult(), "partial");
+                if (!partial.isBlank() && !partial.equals(lastPartial)) {
+                    lastPartial = partial;
+                    onResult.accept(new TranscriptEvent(partial.trim(), false, -1, channelId));
+                }
             }
-            // Interim partials are intentionally not emitted (final-only contract).
         } catch (Exception e) {
             log.error("Vosk recognition error (channel={}): {}", channelId, e.getMessage());
             if (onError != null) onError.accept("Vosk: erro de reconhecimento — " + e.getMessage());
@@ -119,6 +129,7 @@ public class VoskSttProvider implements SpeechToTextProvider {
 
     /** Parses a Vosk result JSON ({@code {"text": "..."}}) and emits it as a final event. */
     private void emitFinal(String resultJson) {
+        lastPartial = "";   // utterance closed; next partial starts fresh
         String text = field(resultJson, "text");
         if (!text.isBlank()) {
             onResult.accept(new TranscriptEvent(text.trim(), true, -1, channelId));
