@@ -36,8 +36,23 @@
     -fx-font-weight: 700;
 }
 .source-label { -fx-text-fill: -app-text-muted; -fx-font-style: italic; }
-.partial-label { -fx-text-fill: -app-text-muted; -fx-font-style: italic; -fx-font-size: 12px; }
+/* Live transcription preview — a tinted chip with a blue accent bar so it reads
+   clearly as "being heard right now". Font size comes from an inline binding so
+   it scales with the A−/A+ control. */
+.partial-label {
+    -fx-text-fill: -app-primary;
+    -fx-font-style: italic;
+    -fx-background-color: -app-tint;
+    -fx-border-color: -app-primary;
+    -fx-border-width: 0 0 0 3;
+    -fx-padding: 3 8 3 8;
+    -fx-background-radius: 3px;
+}
 .rating-label { -fx-text-fill: -app-amber; -fx-font-size: 16px; -fx-font-weight: 700; }
+
+/* Transparent, edge-to-edge scroll pane (used for the resizable follow-up radios). */
+.flat-scroll, .flat-scroll > .viewport { -fx-background-color: transparent; }
+.flat-scroll { -fx-padding: 0; -fx-background-insets: 0; }
 
 /* ---- Buttons (base) ---- */
 .button {

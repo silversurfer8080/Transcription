@@ -35,8 +35,8 @@ public class Main {
      * Project-wide default capture format.
      *
      * <p>16 kHz / 16-bit signed / mono / little-endian: the canonical input
-     * shape for Deepgram, AssemblyAI, Vosk and whisper.cpp. Anything coarser
-     * gets rejected by the streaming endpoints; anything finer is wasted
+     * shape for Groq Whisper, AssemblyAI, Vosk and whisper.cpp. Anything coarser
+     * gets rejected by the STT endpoints; anything finer is wasted
      * bandwidth on a voice signal that tops out around 8 kHz of useful
      * spectrum anyway.
      */

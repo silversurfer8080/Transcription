@@ -32,6 +32,13 @@ public interface SpeechToTextProvider extends AutoCloseable {
     /** Flushes, closes the connection, and releases resources. Idempotent. */
     void stop();
 
+    /**
+     * Optional hook to receive friendly, one-line error strings (bad key, rate
+     * limit, network, missing model) for surfacing in the UI. No-op by default so
+     * callers can wire it uniformly without knowing the concrete provider type.
+     */
+    default void setErrorListener(java.util.function.Consumer<String> onError) {}
+
     @Override
     default void close() {
         stop();

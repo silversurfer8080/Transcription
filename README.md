@@ -34,14 +34,14 @@ Speaker diarization is intentionally avoided — the two streams are kept physic
 | Build | Gradle 8.10.2 with Kotlin DSL |
 | UI | JavaFX 21 (`org.openjfx.javafxplugin`) |
 | Audio capture | Java Sound API (`javax.sound.sampled`) |
-| HTTP / WebSocket | `java.net.http` (standard library) |
-| STT provider (default) | Deepgram streaming API |
-| LLM analysis | Anthropic Claude API |
+| HTTP client | `java.net.http` (standard library) |
+| STT provider | Groq Whisper API (batch, free tier) |
+| LLM analysis | Groq LLM API (`llama-3.3-70b-versatile`) |
 | JSON | Jackson 2.17 |
 | Logging | SLF4J + Logback |
 | Tests | JUnit 5 |
 
-No paid runtime dependencies. STT and LLM providers are pluggable; the defaults use free-tier credits from Deepgram and Anthropic.
+No paid runtime dependencies. STT and LLM both run on Groq's free tier; the STT layer stays pluggable behind `SpeechToTextProvider` for future offline fallbacks (Vosk, whisper.cpp).
 
 ---
 
@@ -59,7 +59,7 @@ Two `AudioCapture` instances bind to different OS mixers. The user picks which m
 
 ### Canonical audio format
 
-A single contract is enforced project-wide: **PCM signed, 16 kHz, 16-bit, mono, little-endian** (`Main.DEFAULT_FORMAT`). This shape is accepted natively by Deepgram, AssemblyAI, Vosk and whisper.cpp, avoids resampling cost in the common case, and matches what the WAV writer expects.
+A single contract is enforced project-wide: **PCM signed, 16 kHz, 16-bit, mono, little-endian** (`Main.DEFAULT_FORMAT`). This shape is accepted natively by Groq Whisper, AssemblyAI, Vosk and whisper.cpp, avoids resampling cost in the common case, and matches what the WAV writer expects.
 
 ### Capture pipeline
 
@@ -85,12 +85,12 @@ interface SpeechToTextProvider {
 }
 ```
 
-`TranscriptEvent` carries: partial-vs-final flag, timestamp, confidence, channel id. Planned implementations:
+`TranscriptEvent` carries: partial-vs-final flag, timestamp, confidence, channel id. Implementations:
 
-- `DeepgramStreamingProvider` — WebSocket to `wss://api.deepgram.com/v1/listen` ✅
-- `AssemblyAiStreamingProvider` — Universal-Streaming WebSocket
-- `VoskLocalProvider` — offline, via the official Java binding
-- `WhisperCppProvider` — offline, via `whisper.cpp` over JNI or `ProcessBuilder`
+- `GroqWhisperProvider` — batch Whisper over HTTPS on Groq's free tier ✅
+- `AssemblyAiStreamingProvider` — Universal-Streaming WebSocket (planned)
+- `VoskLocalProvider` — offline, via the official Java binding (planned)
+- `WhisperCppProvider` — offline, via `whisper.cpp` over JNI or `ProcessBuilder` (planned)
 
 ### Streaming WAV writes
 
@@ -100,21 +100,17 @@ interface SpeechToTextProvider {
 
 ## Configuration
 
-API keys are read from environment variables at startup and pre-filled into the UI fields (masked). Set them before launching:
+The Groq API key is read from an environment variable at startup and pre-filled into the UI field (masked). A single key powers both transcription and analysis. Set it before launching:
 
 ```bash
-# Deepgram (required for live transcription)
-export DEEPGRAM_API_KEY=your_key_here
-
-# Anthropic Claude (required for LLM-powered analysis tabs)
-export ANTHROPIC_API_KEY=your_key_here
+# Groq — used for both STT (Whisper) and LLM analysis
+export GROQ_API_KEY=your_key_here
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-$env:DEEPGRAM_API_KEY  = "your_key_here"
-$env:ANTHROPIC_API_KEY = "your_key_here"
+$env:GROQ_API_KEY = "your_key_here"
 ```
 
 Keys can also be typed directly into the password fields in the UI — they are never logged or written to disk.
@@ -166,9 +162,9 @@ src/main/java/org/example/
   stt/
     SpeechToTextProvider.java     # provider interface
     TranscriptEvent.java          # transcript result record
-    DeepgramStreamingProvider.java
+    GroqWhisperProvider.java      # batch Whisper on Groq's free tier
   llm/
-    AnthropicClient.java          # Claude API calls (analysis tabs)
+    GroqClient.java               # Groq LLM calls (answer evaluation + follow-ups)
   ui/
     InterviewApp.java             # main JavaFX application
     PronunciationTab.java         # self-audio coaching tab
