@@ -72,8 +72,8 @@ class SessionPersistenceTest {
     @Test
     void renderQuestionBlock_withFollowUps_emitsNumberedMarkerLines() {
         List<InterviewApp.FollowUp> fus = List.of(
-                new InterviewApp.FollowUp("Tell me more about X?", "It means Y"),
-                new InterviewApp.FollowUp("And what about Z?", "Z is like W")
+                new InterviewApp.FollowUp("Tell me more about X?", "", "It means Y"),
+                new InterviewApp.FollowUp("And what about Z?", "", "Z is like W")
         );
         String block = InterviewApp.renderQuestionBlock(3, "Q", "A", fus);
         assertTrue(block.contains("FOLLOW-UP 1: Tell me more about X?"),
@@ -92,7 +92,7 @@ class SessionPersistenceTest {
     @Test
     void renderQuestionBlock_emptyFollowUpAnswer_producesEmptyAnswerLine() {
         List<InterviewApp.FollowUp> fus = List.of(
-                new InterviewApp.FollowUp("Unanswered?", "")
+                new InterviewApp.FollowUp("Unanswered?", "", "")
         );
         String block = InterviewApp.renderQuestionBlock(1, "Q", "A", fus);
         List<String> lines = bodyLines(block);
@@ -225,8 +225,8 @@ class SessionPersistenceTest {
     @Test
     void roundTrip_withFollowUps_preservesAllRounds() {
         List<InterviewApp.FollowUp> fus = List.of(
-                new InterviewApp.FollowUp("What is GC?",        "Automatic memory management."),
-                new InterviewApp.FollowUp("When does GC run?",  "When heap is low.")
+                new InterviewApp.FollowUp("What is GC?",        "", "Automatic memory management."),
+                new InterviewApp.FollowUp("When does GC run?",  "", "When heap is low.")
         );
         String rendered = InterviewApp.renderQuestionBlock(
                 1, "Explain JVM.", "It executes bytecode.", fus);
@@ -243,7 +243,7 @@ class SessionPersistenceTest {
     @Test
     void roundTrip_emptyFollowUpAnswer_preservesRoundCountAndEmptyAnswer() {
         List<InterviewApp.FollowUp> fus = List.of(
-                new InterviewApp.FollowUp("Unanswered follow-up?", "")
+                new InterviewApp.FollowUp("Unanswered follow-up?", "", "")
         );
         String rendered = InterviewApp.renderQuestionBlock(1, "Q", "A", fus);
         InterviewApp.LoadedQuestion lq = InterviewApp.parseSection(bodyLines(rendered));
@@ -258,9 +258,9 @@ class SessionPersistenceTest {
     @Test
     void roundTrip_threeFollowUps_allPreservedInOrder() {
         List<InterviewApp.FollowUp> fus = List.of(
-                new InterviewApp.FollowUp("Follow Q1", "Answer 1"),
-                new InterviewApp.FollowUp("Follow Q2", "Answer 2"),
-                new InterviewApp.FollowUp("Follow Q3", "Answer 3")
+                new InterviewApp.FollowUp("Follow Q1", "", "Answer 1"),
+                new InterviewApp.FollowUp("Follow Q2", "", "Answer 2"),
+                new InterviewApp.FollowUp("Follow Q3", "", "Answer 3")
         );
         String rendered = InterviewApp.renderQuestionBlock(5, "Main Q", "Main A", fus);
         InterviewApp.LoadedQuestion lq = InterviewApp.parseSection(bodyLines(rendered));
@@ -271,5 +271,70 @@ class SessionPersistenceTest {
             assertEquals("Answer " + (i + 1),  lq.followUps().get(i).answer(),
                     "Follow-up answer " + (i + 1) + " must be in order");
         }
+    }
+
+    // ── Follow-up EXPECTED guide (AI-generated) ──────────────────────────────
+
+    @Test
+    void renderQuestionBlock_followUpWithExpected_emitsExpectedLine() {
+        List<InterviewApp.FollowUp> fus = List.of(
+                new InterviewApp.FollowUp("Elaborate on sync?",
+                        "A strong answer covers a shared schema and versioning.", "We used JSON."));
+        String block = InterviewApp.renderQuestionBlock(1, "Q", "A", fus);
+        assertTrue(block.contains("EXPECTED: A strong answer covers a shared schema and versioning."),
+                "A non-blank guide must be written on an EXPECTED: line");
+    }
+
+    @Test
+    void renderQuestionBlock_blankExpected_omitsExpectedLine() {
+        // Backward compatibility: a blank guide must not add an EXPECTED: line, so the
+        // block is byte-identical to the pre-guide format.
+        List<InterviewApp.FollowUp> withBlank = List.of(
+                new InterviewApp.FollowUp("Q1?", "", "A1"));
+        assertFalse(InterviewApp.renderQuestionBlock(1, "Q", "A", withBlank).contains("EXPECTED:"),
+                "Blank guide must not emit an EXPECTED: line");
+    }
+
+    @Test
+    void parseSection_followUpWithExpectedLine_parsesGuideSeparately() {
+        List<String> lines = List.of(
+                "Q", "", "A", "",
+                "FOLLOW-UP 1: Elaborate?",
+                "EXPECTED: Look for a shared contract and server-side re-validation.",
+                "We keep one JSON schema.");
+        InterviewApp.LoadedQuestion lq = InterviewApp.parseSection(lines);
+        assertEquals(1, lq.followUps().size());
+        assertEquals("Elaborate?", lq.followUps().get(0).question());
+        assertEquals("Look for a shared contract and server-side re-validation.",
+                lq.followUps().get(0).expected(), "EXPECTED line must become the guide");
+        assertEquals("We keep one JSON schema.", lq.followUps().get(0).answer(),
+                "Lines after EXPECTED must be the answer");
+    }
+
+    @Test
+    void parseSection_legacyFollowUpWithoutExpected_yieldsBlankGuide() {
+        // Files written before the guide feature have no EXPECTED line → expected == "".
+        List<String> lines = List.of(
+                "Q", "", "A", "",
+                "FOLLOW-UP 1: Old follow-up?",
+                "Old answer.");
+        InterviewApp.LoadedQuestion lq = InterviewApp.parseSection(lines);
+        assertEquals("", lq.followUps().get(0).expected(),
+                "Legacy follow-up without EXPECTED must yield a blank guide");
+        assertEquals("Old answer.", lq.followUps().get(0).answer());
+    }
+
+    @Test
+    void roundTrip_followUpWithExpected_preservesGuide() {
+        List<InterviewApp.FollowUp> fus = List.of(
+                new InterviewApp.FollowUp("How do you sync?",
+                        "Shared schema, versioning, and integrity handling.", "Via a JSON contract."));
+        String rendered = InterviewApp.renderQuestionBlock(1, "Explain X.", "Because Y.", fus);
+        InterviewApp.LoadedQuestion lq = InterviewApp.parseSection(bodyLines(rendered));
+        assertEquals(1, lq.followUps().size());
+        assertEquals("How do you sync?", lq.followUps().get(0).question());
+        assertEquals("Shared schema, versioning, and integrity handling.",
+                lq.followUps().get(0).expected(), "Guide must survive the round-trip");
+        assertEquals("Via a JSON contract.", lq.followUps().get(0).answer());
     }
 }

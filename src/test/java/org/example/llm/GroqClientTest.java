@@ -526,6 +526,38 @@ class GroqClientTest {
                 "Empty expected answer must tell model to judge on its own expertise");
     }
 
+    // ── buildFollowUpExpectedPrompt (AI guide for a chosen follow-up) ──────────
+
+    @Test
+    void buildFollowUpExpectedPrompt_embedsFollowUpAndInitialQuestion() {
+        String prompt = GroqClient.buildFollowUpExpectedPrompt(
+                "Senior Java role", "Explain microservices migration.",
+                "We split the monolith by service.", "How did you keep data consistent?");
+        assertTrue(prompt.contains("How did you keep data consistent?"),
+                "The follow-up question to guide must be embedded");
+        assertTrue(prompt.contains("Explain microservices migration."),
+                "The initial question must be embedded for context");
+        assertTrue(prompt.contains("Senior Java role"),
+                "The job description must be embedded when provided");
+    }
+
+    @Test
+    void buildFollowUpExpectedPrompt_asksForSingleParagraphNoMarkdownEnglish() {
+        String prompt = GroqClient.buildFollowUpExpectedPrompt(
+                "", "Q", "A", "Follow-up?");
+        assertTrue(prompt.contains("single paragraph"), "Must ask for one paragraph");
+        assertTrue(prompt.contains("no bullet points"), "Must forbid bullet points");
+        assertTrue(prompt.contains("no markdown"),      "Must forbid markdown");
+        assertTrue(prompt.contains("Respond in English"), "Must require English");
+    }
+
+    @Test
+    void buildFollowUpExpectedPrompt_blankInitialAnswer_usesPlaceholder() {
+        String prompt = GroqClient.buildFollowUpExpectedPrompt("", "Q", "  ", "Follow-up?");
+        assertTrue(prompt.contains("(not captured)"),
+                "A blank candidate answer must fall back to the (not captured) placeholder");
+    }
+
     @Test
     void buildExchangePrompt_nullFollowUps_treatedAsEmpty() {
         // Base case: null follow-up list must still produce a valid prompt

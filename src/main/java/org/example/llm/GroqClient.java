@@ -45,6 +45,19 @@ public class GroqClient {
                 candidateName, gender, starScale, jobDescription));
     }
 
+    /**
+     * Generates a short, single-paragraph "reference points" guide for a follow-up
+     * question — what a strong answer should cover — for the interviewer to judge
+     * against. Called only when a follow-up is actually selected, so the two unchosen
+     * options never cost a request.
+     */
+    public static String generateFollowUpExpected(LlmProvider provider, String apiKey,
+            String jobDescription, String initialQuestion, String candidateInitialAnswer,
+            String followUpQuestion) throws Exception {
+        return call(provider, apiKey, buildFollowUpExpectedPrompt(
+                jobDescription, initialQuestion, candidateInitialAnswer, followUpQuestion));
+    }
+
     private static String call(LlmProvider provider, String apiKey, String userPrompt) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", provider.defaultModel());
@@ -253,6 +266,38 @@ public class GroqClient {
                 """.formatted(whoLine(candidateName, gender), jobSection(jobDescription),
                         question, expectedSection(expectedAnswer), conversation,
                         scaleGuide(max), max);
+    }
+
+    /**
+     * Builds the prompt for the one-paragraph follow-up "expected answer" guide.
+     * Output is a single prose paragraph of reference points (no bullets/markdown),
+     * grounded in the role and the exchange so far. Package-private for testing.
+     */
+    static String buildFollowUpExpectedPrompt(String jobDescription, String initialQuestion,
+            String candidateInitialAnswer, String followUpQuestion) {
+        String ia = (candidateInitialAnswer == null) ? "" : candidateInitialAnswer.trim();
+        return """
+                You are assisting a technical interviewer. Based on the role and the exchange \
+                so far, write a SHORT single paragraph (3 to 5 sentences) describing the key \
+                reference points a strong answer to the follow-up question below should cover — \
+                that is, what the interviewer should listen for. This is a private guide for the \
+                interviewer and is never shown to the candidate.
+
+                Write ONLY the paragraph: no bullet points, no headings, no markdown, and no \
+                preamble such as "Here is". Be concrete and concise. Respond in English.
+
+                %s
+
+                Initial question asked:
+                %s
+
+                Candidate's initial answer (automatic speech-to-text, may contain errors):
+                %s
+
+                Follow-up question to write the guide for:
+                %s
+                """.formatted(jobSection(jobDescription), initialQuestion,
+                        ia.isEmpty() ? "(not captured)" : ia, followUpQuestion);
     }
 
     /**

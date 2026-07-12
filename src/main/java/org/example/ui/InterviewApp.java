@@ -76,22 +76,29 @@ public class InterviewApp extends Application {
 
     // ── Follow-up round UI state (FX-thread only) ──────────────────────────────
 
-    /** One confirmed follow-up round inside a QuestionPanel. */
+    /**
+     * One confirmed follow-up round inside a QuestionPanel. Its three text areas live
+     * in the three columns (below the initial Q/E/A, divided by a separator line):
+     * the read-only question in QUESTION, the AI-generated guide in EXPECTED ANSWER,
+     * and the candidate's spoken answer in CANDIDATE ANSWER.
+     */
     private static final class FollowUpRound {
         final String   question;
-        final TextArea answerArea;
-        final VBox     container;
-        FollowUpRound(String question, TextArea answerArea, VBox container) {
-            this.question   = question;
-            this.answerArea = answerArea;
-            this.container  = container;
+        final TextArea questionView;   // read-only, QUESTION column
+        final TextArea expectedArea;   // AI-generated reference points (editable), EXPECTED column
+        final TextArea answerArea;     // candidate's follow-up answer (live sink), CANDIDATE column
+        FollowUpRound(String question, TextArea questionView, TextArea expectedArea, TextArea answerArea) {
+            this.question     = question;
+            this.questionView = questionView;
+            this.expectedArea = expectedArea;
+            this.answerArea   = answerArea;
         }
     }
 
     // ── Persistence DTOs (package-private so same-package tests can reach them) ─
 
-    /** A follow-up (question, answer) pair read back from disk. */
-    record FollowUp(String question, String answer) {}
+    /** A follow-up (question, AI-generated expected guide, candidate answer) read back from disk. */
+    record FollowUp(String question, String expected, String answer) {}
 
     /** A question section parsed back from a saved session TXT. */
     record LoadedQuestion(String question, String answer, List<FollowUp> followUps) {}
@@ -101,6 +108,10 @@ public class InterviewApp extends Application {
     // text inside transcripts is never mis-parsed as a follow-up marker.
     private static final Pattern FOLLOWUP_LINE_PATTERN =
             Pattern.compile("^\\s*FOLLOW-UP\\s+(\\d+):\\s?(.*)$");
+
+    // Optional first line of a follow-up block carrying its AI-generated guide.
+    private static final Pattern FOLLOWUP_EXPECTED_PATTERN =
+            Pattern.compile("^\\s*EXPECTED:\\s?(.*)$");
 
     // ---- session state (FX thread only, except activeQuestion which is volatile) ----
     private AudioCapture candidateCapture;
@@ -811,7 +822,7 @@ public class InterviewApp extends Application {
             panel.setInitialQuestion(lq.question());
             panel.setInitialAnswer(lq.answer());
             for (FollowUp fu : lq.followUps())
-                panel.addLoadedRound(fu.question(), fu.answer());
+                panel.addLoadedRound(fu.question(), fu.expected(), fu.answer());
             panel.markStopped();
             questionPanels.add(panel);
             questionsBox.getChildren().add(panel.titledPane);
@@ -876,25 +887,39 @@ public class InterviewApp extends Application {
         // Step 2: parse head (initial question + answer) using existing logic
         LoadedQuestion qa = splitQuestionAnswer(lines.subList(0, fuStart));
 
-        // Step 3: parse tail (follow-up rounds)
+        // Step 3: parse tail (follow-up rounds). Each block is:
+        //   FOLLOW-UP n: <question>
+        //   [EXPECTED: <guide>]     (optional; only the first content line)
+        //   <answer lines>
         List<FollowUp> followUps = new ArrayList<>();
         List<String> tail = lines.subList(fuStart, lines.size());
         String currentFuQuestion = null;
-        List<String> currentFuLines = new ArrayList<>();
+        String currentFuExpected = "";
+        List<String> currentFuAnswerLines = new ArrayList<>();
         for (String line : tail) {
             Matcher m = FOLLOWUP_LINE_PATTERN.matcher(line);
             if (m.matches()) {
                 if (currentFuQuestion != null) {
-                    followUps.add(new FollowUp(currentFuQuestion, joinNonBlank(currentFuLines)));
+                    followUps.add(new FollowUp(currentFuQuestion, currentFuExpected,
+                            joinNonBlank(currentFuAnswerLines)));
                 }
                 currentFuQuestion = m.group(2).trim();
-                currentFuLines = new ArrayList<>();
+                currentFuExpected = "";
+                currentFuAnswerLines = new ArrayList<>();
             } else if (currentFuQuestion != null) {
-                currentFuLines.add(line);
+                Matcher em = FOLLOWUP_EXPECTED_PATTERN.matcher(line);
+                // Only the first content line of the block may be the EXPECTED guide,
+                // so an "EXPECTED:" that appears later inside the answer is left intact.
+                if (em.matches() && currentFuExpected.isEmpty() && currentFuAnswerLines.isEmpty()) {
+                    currentFuExpected = em.group(1).trim();
+                } else {
+                    currentFuAnswerLines.add(line);
+                }
             }
         }
         if (currentFuQuestion != null) {
-            followUps.add(new FollowUp(currentFuQuestion, joinNonBlank(currentFuLines)));
+            followUps.add(new FollowUp(currentFuQuestion, currentFuExpected,
+                    joinNonBlank(currentFuAnswerLines)));
         }
 
         return new LoadedQuestion(qa.question(), qa.answer(), followUps);
@@ -940,11 +965,13 @@ public class InterviewApp extends Application {
      * &lt;answer&gt;
      *
      * FOLLOW-UP 1: &lt;follow-up question&gt;
+     * EXPECTED: &lt;AI-generated guide&gt;   (omitted when blank)
      * &lt;follow-up answer&gt;
      * </pre>
      *
-     * With zero follow-ups the output is byte-identical to the previous format,
-     * preserving backward compatibility with existing session files.
+     * With zero follow-ups the output is byte-identical to the previous format, and a
+     * follow-up with a blank guide omits its {@code EXPECTED:} line — so files written
+     * before the guide feature still round-trip and load correctly.
      */
     static String renderQuestionBlock(int number, String question, String answer,
                                       List<FollowUp> followUps) {
@@ -960,6 +987,9 @@ public class InterviewApp extends Application {
                 sb.append(ls);
                 sb.append("FOLLOW-UP ").append(i + 1).append(": ")
                   .append(fu.question() == null ? "" : fu.question().trim()).append(ls);
+                if (fu.expected() != null && !fu.expected().isBlank()) {
+                    sb.append("EXPECTED: ").append(fu.expected().trim()).append(ls);
+                }
                 sb.append(fu.answer() == null ? "" : fu.answer().trim()).append(ls);
             }
         }
@@ -977,7 +1007,7 @@ public class InterviewApp extends Application {
             first = false;
             List<FollowUp> fus = new ArrayList<>();
             for (FollowUpRound r : p.rounds) {
-                fus.add(new FollowUp(r.question, r.answerArea.getText()));
+                fus.add(new FollowUp(r.question, r.expectedArea.getText(), r.answerArea.getText()));
             }
             sb.append(renderQuestionBlock(p.number,
                     p.questionArea.getText(), p.answerArea.getText(), fus));
@@ -1173,10 +1203,15 @@ public class InterviewApp extends Application {
         return text.replaceAll("(?im)^\\s*RATING:\\s*\\d+\\s*/\\s*\\d+\\s*$", "").trim();
     }
 
+    // Leading [\s>#*_-]* tolerates markdown the model may wrap the header in
+    // (e.g. GPT-OSS emits "**FOLLOW-UP QUESTIONS:**"); the trailing \b.*$ makes the
+    // colon optional and swallows any trailing "**". Without this the whole follow-up
+    // block leaks into the analysis body and no radios appear.
     private static final Pattern FOLLOWUP_HEADER_PATTERN =
-            Pattern.compile("(?im)^\\s*FOLLOW-?\\s?UP\\s+QUESTIONS\\s*:.*$");
+            Pattern.compile("(?im)^[\\s>#*_-]*FOLLOW-?\\s?UP\\s+QUESTIONS\\b.*$");
 
-    private static List<String> parseFollowUps(String text) {
+    // package-private for FollowUpParsingTest
+    static List<String> parseFollowUps(String text) {
         Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
         if (!m.find()) return List.of();
         String after = text.substring(m.end());
@@ -1185,7 +1220,10 @@ public class InterviewApp extends Application {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
             if (trimmed.toLowerCase().startsWith("rating:")) break;
-            String stripped = trimmed.replaceFirst("^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "").trim();
+            String stripped = trimmed
+                    .replaceFirst("^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "")  // bullet / number prefix
+                    .replaceAll("^\\*+|\\*+$", "")                          // surrounding **markdown**
+                    .trim();
             if (!stripped.isEmpty()) result.add(stripped);
         }
         return result;
@@ -1244,10 +1282,15 @@ public class InterviewApp extends Application {
         private Button   stopBtn;
         private Button   continueBtn;
 
+        // Per-column section stacks: the initial area, then a divided section per
+        // confirmed follow-up round (addRound appends to all three).
+        private VBox questionStack;
+        private VBox expectedStack;
+        private VBox answerStack;
+
         // Follow-up round state (FX thread only)
         private final List<FollowUpRound> rounds = new ArrayList<>();
         private TextArea currentSink;       // live transcription target; updated on confirm
-        private VBox roundsBox;             // stacked confirmed round blocks
         private VBox followUpSelectBox;     // radios + OK (hidden until analysis produces options)
         private ToggleGroup followUpGroup;
         private final List<RadioButton> followUpRadios = new ArrayList<>();  // exactly 3
@@ -1269,22 +1312,37 @@ public class InterviewApp extends Application {
         // ── UI construction ──────────────────────────────────────────────
 
         private void buildUI() {
-            // ── Three side-by-side columns ───────────────────────────────────
+            // ── Three side-by-side columns, each a vertical section stack ─────
             answerArea   = pasteArea("A resposta do candidato aparece aqui…");
             expectedArea = pasteArea("Cole aqui a resposta esperada / gabarito…");
             questionArea = pasteArea("Cole aqui a pergunta…");
+            answerArea.setPrefRowCount(8);
+            expectedArea.setPrefRowCount(8);
+            questionArea.setPrefRowCount(8);
+
+            // Each column starts with the initial area; confirming a follow-up appends
+            // a divider + labelled section to all three (see addRound). The whole panel
+            // scrolls in the outer questions scroll pane, so the stacks grow freely.
+            questionStack = new VBox(6, questionArea);
+            expectedStack = new VBox(6, expectedArea);
+            answerStack   = new VBox(6, answerArea);
 
             // SplitPane gives draggable dividers so the user can resize column widths.
             SplitPane columns = new SplitPane(
-                    column("QUESTION",         questionArea),
-                    column("EXPECTED ANSWER",  expectedArea),
-                    column("CANDIDATE ANSWER", answerArea));
+                    column("QUESTION",         questionStack),
+                    column("EXPECTED ANSWER",  expectedStack),
+                    column("CANDIDATE ANSWER", answerStack));
             columns.setDividerPositions(0.34, 0.67);
 
             partialLabel = new Label();
             partialLabel.getStyleClass().add("partial-label");
             partialLabel.setWrapText(true);
             partialLabel.setMaxWidth(Double.MAX_VALUE);
+            partialLabel.setManaged(false);   // takes no space until there's live text
+            partialLabel.setVisible(false);
+            // Scale the live-preview text with the A−/A+ font control, like the areas.
+            partialLabel.styleProperty().bind(Bindings.createStringBinding(
+                    () -> "-fx-font-size: " + fontSize.get() + "px;", fontSize));
 
             // ── Buttons (with the AI star rating on the left) ──────────────────
             ratingLabel = new Label();
@@ -1327,9 +1385,6 @@ public class InterviewApp extends Application {
             Label analysisLabel = sectionLabel("ANÁLISE DA IA");
             analysisArea = transcriptArea(6, "A análise da IA aparecerá aqui…");
 
-            // ── Confirmed follow-up rounds (stacked, initially empty) ────────
-            roundsBox = new VBox(8);
-
             // ── Follow-up selection box (3 radios + OK; hidden until analysis) ──
             followUpGroup = new ToggleGroup();
             Label followUpSelectLabel = sectionLabel("ESCOLHA UM FOLLOW-UP");
@@ -1366,7 +1421,15 @@ public class InterviewApp extends Application {
             followUpGroup.selectedToggleProperty().addListener((o, was, now) ->
                     followUpOkBtn.setDisable(now == null));
 
-            followUpSelectBox = new VBox(6, followUpSelectLabel, r1, r2, r3, followUpOkBtn);
+            // Radios live in a scroll pane so the follow-up area can be dragged smaller
+            // (via the resize handle) without ever clipping long, wrapped questions.
+            VBox followUpRadiosBox = new VBox(6, r1, r2, r3, followUpOkBtn);
+            ScrollPane followUpScroll = new ScrollPane(followUpRadiosBox);
+            followUpScroll.setFitToWidth(true);
+            followUpScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+            followUpScroll.getStyleClass().add("flat-scroll");
+            followUpSelectBox = new VBox(6, followUpSelectLabel,
+                    wrapResizableRow(followUpScroll, 130));
             followUpSelectBox.setVisible(false);
             followUpSelectBox.setManaged(false);
 
@@ -1374,14 +1437,14 @@ public class InterviewApp extends Application {
             currentSink = answerArea;
 
             // ── Content layout (Order invariant) ─────────────────────────────
-            // 1. columns  2. buttons/rating  3. rounds stack  4. analysis  5. radios
+            // 1. columns (grow with follow-up sections)  2. live preview  3. buttons/rating
+            // 4. analysis (resizable)  5. follow-up radios (resizable)
             VBox content = new VBox(6,
-                    wrapResizableRow(columns, 150),
+                    columns,
                     partialLabel,
                     buttons,
                     new Separator(),
-                    roundsBox,
-                    analysisLabel, analysisArea,
+                    analysisLabel, wrapResizableRow(analysisArea, 160),
                     followUpSelectBox);
             content.setPadding(new Insets(10));
 
@@ -1393,16 +1456,22 @@ public class InterviewApp extends Application {
             titledPane.setAnimated(true);
         }
 
-        // Builds one SplitPane column: a section label above a text area that
-        // stretches to fill the pane. A small min width lets dividers be dragged
-        // narrow without letting a column collapse to nothing.
-        private VBox column(String labelText, TextArea ta) {
-            VBox.setVgrow(ta, Priority.ALWAYS);
-            ta.setMaxHeight(Double.MAX_VALUE);
-            VBox col = new VBox(4, sectionLabel(labelText), ta);
-            col.setMaxHeight(Double.MAX_VALUE);
+        // Builds one SplitPane column: a section label above a vertical stack of
+        // sections (initial area + one per follow-up). A small min width lets dividers
+        // be dragged narrow without letting a column collapse to nothing.
+        private VBox column(String labelText, VBox stack) {
+            VBox col = new VBox(4, sectionLabel(labelText), stack);
             col.setMinWidth(60);
             return col;
+        }
+
+        // A compact section area for a follow-up row (read-only question view, or an
+        // editable expected/answer area). Font follows the global A−/A+ control.
+        private TextArea followUpArea(boolean editable, String prompt) {
+            TextArea ta = editable ? pasteArea(prompt) : transcriptArea(3, prompt);
+            ta.setPrefRowCount(3);
+            ta.setEditable(editable);
+            return ta;
         }
 
         // An editable, wrapping text area whose font follows the global A−/A+ control.
@@ -1435,6 +1504,15 @@ public class InterviewApp extends Application {
             return ta;
         }
 
+        // Sets the live-preview text and collapses the label when it's empty, so an
+        // empty preview chip never shows.
+        private void setPartialText(String text) {
+            partialLabel.setText(text == null ? "" : text);
+            boolean show = text != null && !text.isBlank();
+            partialLabel.setManaged(show);
+            partialLabel.setVisible(show);
+        }
+
         // ── Transcript events (arrive on STT thread → dispatched to FX thread) ─
 
         void onCandidateEvent(TranscriptEvent event) {
@@ -1459,10 +1537,10 @@ public class InterviewApp extends Application {
                         sink.positionCaret(updated.length());
                         sink.setScrollTop(Double.MAX_VALUE);
                     }
-                    partialLabel.setText("");
+                    setPartialText("");
                     persistSessionTxt();
                 } else {
-                    partialLabel.setText(event.text());
+                    setPartialText(event.text());
                 }
             });
         }
@@ -1505,42 +1583,94 @@ public class InterviewApp extends Application {
             followUpSelectBox.setManaged(true);
         }
 
-        /** Handles OK: fixes the chosen follow-up, creates a round, switches the sink. */
+        /** Handles OK: fixes the chosen follow-up, creates a round, generates its guide. */
         private void confirmFollowUp() {
             RadioButton sel = (RadioButton) followUpGroup.getSelectedToggle();
             if (sel == null) return;
             String fq = sel.getText();
-            addRound(fq, null, true);       // creates round, switches currentSink
+            FollowUpRound r = addRound(fq, null, null, true);  // creates round, switches sink
             showFollowUpOptions(List.of()); // consume this set; hides box until next analysis
             persistSessionTxt();            // save the new (empty-answer) round immediately
+            generateExpectedFor(r, fq);     // fill the EXPECTED guide (async, only for the chosen one)
         }
 
         /**
-         * Creates a follow-up round block (read-only question view + answer area) and
-         * appends it to the rounds stack. Makes the new answer area the live sink.
+         * Appends a follow-up round across the three columns — a read-only question view
+         * (QUESTION), an editable AI-guide area (EXPECTED ANSWER) and the candidate's
+         * follow-up answer area (CANDIDATE ANSWER) — each preceded by a divider line.
+         * Makes the new answer area the live transcription sink.
          *
-         * @param question   the chosen follow-up question (fixed)
-         * @param answerText initial answer text (null → empty)
-         * @param editable   true when created live; false when loaded from a saved file
+         * @param question     the chosen follow-up question (fixed)
+         * @param expectedText initial expected-guide text (null → empty; filled later live)
+         * @param answerText   initial answer text (null → empty)
+         * @param editable     true when created live; false when loaded from a saved file
          */
-        private FollowUpRound addRound(String question, String answerText, boolean editable) {
+        private FollowUpRound addRound(String question, String expectedText,
+                                       String answerText, boolean editable) {
             // Previous follow-up round answer becomes read-only context;
             // the initial answerArea is intentionally left editable (assumption 3).
             if (!rounds.isEmpty()) {
                 rounds.get(rounds.size() - 1).answerArea.setEditable(false);
             }
-            Label header = sectionLabel("FOLLOW-UP " + (rounds.size() + 1));
-            TextArea questionView = transcriptArea(1, "");
-            questionView.setText(question);
-            TextArea roundAnswer = pasteArea("Resposta do candidato ao follow-up…");
-            roundAnswer.setEditable(editable);
-            if (answerText != null) roundAnswer.setText(answerText);
-            VBox container = new VBox(4, header, wrapResizableRow(questionView, 80), roundAnswer);
-            roundsBox.getChildren().add(container);
-            FollowUpRound r = new FollowUpRound(question, roundAnswer, container);
+            int n = rounds.size() + 1;
+
+            TextArea qView = followUpArea(false, "");
+            qView.setText(question);
+            questionStack.getChildren().addAll(
+                    new Separator(), sectionLabel("FOLLOW-UP " + n), qView);
+
+            TextArea eArea = followUpArea(true, "Gabarito do follow-up (gerado pela IA)…");
+            if (expectedText != null) eArea.setText(expectedText);
+            expectedStack.getChildren().addAll(
+                    new Separator(), sectionLabel("FOLLOW-UP " + n + " — GABARITO"), eArea);
+
+            TextArea aArea = followUpArea(true, "Resposta do candidato ao follow-up…");
+            aArea.setEditable(editable);
+            if (answerText != null) aArea.setText(answerText);
+            answerStack.getChildren().addAll(
+                    new Separator(), sectionLabel("FOLLOW-UP " + n), aArea);
+
+            FollowUpRound r = new FollowUpRound(question, qView, eArea, aArea);
             rounds.add(r);
-            currentSink = roundAnswer;   // Sink invariant: newest round is the live target
+            currentSink = aArea;   // Sink invariant: newest round is the live target
             return r;
+        }
+
+        /**
+         * Generates the one-paragraph "reference points" guide for the chosen follow-up
+         * and drops it into its EXPECTED area. Runs on a virtual thread; called only on
+         * confirm, so the two unchosen follow-ups never cost a request. Uses the LLM
+         * provider selected in the "Análise" dropdown.
+         */
+        private void generateExpectedFor(FollowUpRound r, String followUpQuestion) {
+            LlmProvider provider = llmProviderCombo.getValue();
+            String key = llmKeyFor(provider);
+            if (key.isEmpty()) {
+                r.expectedArea.setPromptText("Informe a chave de " + provider + " para gerar o gabarito.");
+                return;
+            }
+            String jobDesc = jobDescArea.getText().trim();
+            String iq = questionArea.getText().trim();
+            String ia = answerArea.getText().trim();
+            r.expectedArea.setPromptText("Gerando gabarito…");
+            Thread.ofVirtual().name("followup-expected-q" + number).start(() -> {
+                try {
+                    String expected = GroqClient.generateFollowUpExpected(
+                            provider, key, jobDesc, iq, ia, followUpQuestion);
+                    Platform.runLater(() -> {
+                        // Don't clobber anything the interviewer typed while it generated.
+                        if (r.expectedArea.getText().isBlank() && expected != null) {
+                            r.expectedArea.setText(expected.trim());
+                        }
+                        r.expectedArea.setPromptText("Gabarito do follow-up (editável)…");
+                        persistSessionTxt();
+                    });
+                } catch (Exception ex) {
+                    log.error("Follow-up expected generation failed (q{})", number, ex);
+                    Platform.runLater(() -> r.expectedArea.setPromptText(
+                            "Falha ao gerar gabarito: " + translateLlmError(ex.getMessage())));
+                }
+            });
         }
 
         /**
@@ -1548,8 +1678,8 @@ public class InterviewApp extends Application {
          * The panel will be {@code markStopped()} after all rounds load, so no live
          * transcription flows in.
          */
-        void addLoadedRound(String question, String answer) {
-            addRound(question, answer, false);
+        void addLoadedRound(String question, String expected, String answer) {
+            addRound(question, expected, answer, false);
         }
 
         // ── Stop / resume ────────────────────────────────────────────────
@@ -1559,7 +1689,7 @@ public class InterviewApp extends Application {
             Platform.runLater(() -> {
                 stopBtn.setDisable(true);
                 continueBtn.setDisable(!sessionRunning);
-                partialLabel.setText("");
+                setPartialText("");
                 titledPane.setExpanded(false);
                 updateTitle();
                 log.info("Question {} stopped", number);
