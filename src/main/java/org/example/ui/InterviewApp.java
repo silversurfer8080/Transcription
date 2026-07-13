@@ -1096,8 +1096,9 @@ public class InterviewApp extends Application {
             questionArea.setPrefRowCount(8);
 
             // Each column starts with the initial area; confirming a follow-up appends
-            // a divider + labelled section to all three (see addRound). The whole panel
-            // scrolls in the outer questions scroll pane, so the stacks grow freely.
+            // a divider + labelled section to all three (see addRound). Each column
+            // scrolls internally (see column()), so the columns row keeps a fixed,
+            // user-resizable height instead of growing the whole panel unboundedly.
             questionStack = new VBox(6, questionArea);
             expectedStack = new VBox(6, expectedArea);
             answerStack   = new VBox(6, answerArea);
@@ -1212,10 +1213,11 @@ public class InterviewApp extends Application {
             currentSink = answerArea;
 
             // ── Content layout (Order invariant) ─────────────────────────────
-            // 1. columns (grow with follow-up sections)  2. live preview  3. buttons/rating
-            // 4. analysis (resizable)  5. follow-up radios (resizable)
+            // 1. columns (resizable — drag the handle to trade height with the analysis)
+            // 2. live preview  3. buttons/rating  4. analysis (resizable)
+            // 5. follow-up radios (resizable)
             VBox content = new VBox(6,
-                    columns,
+                    wrapResizableRow(columns, 260),
                     partialLabel,
                     buttons,
                     new Separator(),
@@ -1235,7 +1237,16 @@ public class InterviewApp extends Application {
         // sections (initial area + one per follow-up). A small min width lets dividers
         // be dragged narrow without letting a column collapse to nothing.
         private VBox column(String labelText, VBox stack) {
-            VBox col = new VBox(4, sectionLabel(labelText), stack);
+            // Each column scrolls internally so the whole columns row can be dragged
+            // shorter than its content (e.g. after several follow-up rounds) via the
+            // resize handle below it, without the SplitPane clipping the lower rounds.
+            ScrollPane scroll = new ScrollPane(stack);
+            scroll.setFitToWidth(true);
+            scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            scroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+            scroll.getStyleClass().add("flat-scroll");
+            VBox.setVgrow(scroll, Priority.ALWAYS);
+            VBox col = new VBox(4, sectionLabel(labelText), scroll);
             col.setMinWidth(60);
             return col;
         }
