@@ -28,12 +28,22 @@ public record AnalysisResult(String prose, int score, int max, List<String> foll
     private static final Pattern RATING_PATTERN =
             Pattern.compile("(?im)^\\s*RATING:\\s*(\\d+)\\s*/\\s*(\\d+)\\s*$");
 
-    // Leading [\s>#*_-]* tolerates markdown the model may wrap the header in
-    // (e.g. GPT-OSS emits "**FOLLOW-UP QUESTIONS:**"); the trailing \b.*$ makes the
-    // colon optional and swallows any trailing "**". Without this the whole follow-up
-    // block leaks into the analysis body and no radios appear.
-    private static final Pattern FOLLOWUP_HEADER_PATTERN =
+    // Primary follow-up header: the marker at the START of a line, tolerating any
+    // markdown a model may wrap it in — leading [\s>#*_-]* absorbs "**", "###", ">"
+    // (GPT-OSS emits "**FOLLOW-UP QUESTIONS:**"); the trailing \b.*$ makes the colon
+    // optional and swallows a trailing "**".
+    private static final Pattern FOLLOWUP_HEADER_STRICT =
             Pattern.compile("(?im)^[\\s>#*_-]*FOLLOW-?\\s?UP\\s+QUESTIONS\\b.*$");
+
+    // Fallback for reasoning models (Gemini 2.5 Flash, GPT-OSS on Cerebras), which
+    // paraphrase the instruction and prefix the header with a lead-in, e.g.
+    // "Here are three follow-up questions to probe deeper:". Leading words are accepted
+    // ONLY when the line still reads like a header — it must END with a colon (optionally
+    // closed by markdown/space). A mid-prose mention ("...ask follow-up questions about
+    // caching.") ends in a period, not a colon, so it is left untouched and never
+    // truncates the analysis body. Tried only after the strict header fails.
+    private static final Pattern FOLLOWUP_HEADER_LOOSE =
+            Pattern.compile("(?im)^.*\\bFOLLOW-?\\s?UP\\s+QUESTIONS\\b[^\\n]*:[ \\t*_]*$");
 
     /**
      * Parses a raw model reply into an {@link AnalysisResult}.
@@ -78,9 +88,9 @@ public record AnalysisResult(String prose, int score, int max, List<String> foll
     }
 
     static List<String> parseFollowUps(String text) {
-        Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
-        if (!m.find()) return List.of();
-        String after = text.substring(m.end());
+        int[] header = findFollowUpHeader(text);
+        if (header == null) return List.of();
+        String after = text.substring(header[1]);
         List<String> result = new ArrayList<>();
         for (String line : after.split("\\R")) {
             String trimmed = line.trim();
@@ -96,9 +106,21 @@ public record AnalysisResult(String prose, int score, int max, List<String> foll
     }
 
     static String stripFollowUpSection(String text) {
-        Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
-        if (m.find()) return text.substring(0, m.start());
+        int[] header = findFollowUpHeader(text);
+        if (header != null) return text.substring(0, header[0]);
         return text;
+    }
+
+    // Locates the follow-up header: the strict start-of-line marker first, then the
+    // preamble-tolerant fallback. Returns {startOffset, endOffset} of the header line,
+    // or null if neither matches. Shared by parseFollowUps and stripFollowUpSection so
+    // the two can never disagree about where the section begins.
+    private static int[] findFollowUpHeader(String text) {
+        Matcher m = FOLLOWUP_HEADER_STRICT.matcher(text);
+        if (m.find()) return new int[]{ m.start(), m.end() };
+        m = FOLLOWUP_HEADER_LOOSE.matcher(text);
+        if (m.find()) return new int[]{ m.start(), m.end() };
+        return null;
     }
 
     // Maps a score onto the 5 named bands, proportionally for any scale (5 or 10).

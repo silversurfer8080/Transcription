@@ -191,4 +191,66 @@ class AnalysisResultTest {
     void followUps_noHeader_returnsEmpty() {
         assertTrue(AnalysisResult.parse("Just prose, no follow-up section.", 5).followUps().isEmpty());
     }
+
+    // ── Reasoning-model header deviations (Gemini / Cerebras preamble) ─────────
+
+    @Test
+    void followUps_preambleBeforeHeader_isParsed() {
+        // Gemini / GPT-OSS often paraphrase and prefix the header with a lead-in
+        // sentence — the strict start-of-line anchor missed this, leaking the whole
+        // block into the prose and showing no radios.
+        String text = """
+                The candidate was solid but shallow on trade-offs.
+
+                Here are three follow-up questions to probe deeper:
+                - How would you size the connection pool?
+                - What breaks under contention?
+                - How do you detect a leak?
+                RATING: 3/5""";
+        AnalysisResult r = AnalysisResult.parse(text, 5);
+        assertEquals(3, r.followUps().size(), "preamble lead-in must not hide the header");
+        assertEquals("How would you size the connection pool?", r.followUps().get(0));
+        assertFalse(r.prose().contains("follow-up questions to probe deeper"),
+                "the header line and everything after must be stripped from the prose");
+        assertFalse(r.prose().contains("How would you size"),
+                "the follow-up questions must not leak into the analysis body");
+    }
+
+    @Test
+    void followUps_shortPreambleHeader_isParsed() {
+        String text = """
+                Reasonable answer.
+
+                Suggested follow-up questions:
+                - One?
+                - Two?""";
+        assertEquals(List.of("One?", "Two?"), AnalysisResult.parse(text, 5).followUps());
+    }
+
+    @Test
+    void followUps_strictHeaderStillPreferredOverProseMention() {
+        // A prose sentence mentions "follow-up questions" (ending in a period), and the
+        // real header appears later. The section must be cut at the REAL header, leaving
+        // the prose mention intact.
+        String text = """
+                I would ask follow-up questions about caching before moving on.
+
+                FOLLOW-UP QUESTIONS:
+                - Real follow-up?""";
+        AnalysisResult r = AnalysisResult.parse(text, 5);
+        assertEquals(List.of("Real follow-up?"), r.followUps());
+        assertTrue(r.prose().contains("ask follow-up questions about caching"),
+                "a mid-prose mention ending in a period must survive in the analysis body");
+    }
+
+    @Test
+    void followUps_proseMentionEndingInPeriod_notTreatedAsHeader() {
+        // No real header at all: a prose-only sentence mentioning the phrase must NOT be
+        // mistaken for a header (it ends in a period, not a colon), so nothing is parsed
+        // and nothing is stripped.
+        String text = "The candidate rambled; I would prepare follow-up questions later.";
+        AnalysisResult r = AnalysisResult.parse(text, 5);
+        assertTrue(r.followUps().isEmpty(), "a period-terminated mention is not a header");
+        assertEquals(text, r.prose(), "prose must be left intact when there is no real header");
+    }
 }
