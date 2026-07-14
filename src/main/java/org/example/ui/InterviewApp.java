@@ -29,8 +29,10 @@ import org.example.Main;
 import org.example.audio.AudioCapture;
 import org.example.audio.AudioDeviceInfo;
 import org.example.audio.AudioDevices;
+import org.example.llm.AnalysisResult;
 import org.example.llm.GroqClient;
 import org.example.llm.LlmProvider;
+import org.example.session.SessionCodec;
 import org.example.stt.GeminiSttProvider;
 import org.example.stt.GroqWhisperProvider;
 import org.example.stt.SpeechToTextProvider;
@@ -55,8 +57,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -95,23 +95,8 @@ public class InterviewApp extends Application {
         }
     }
 
-    // ── Persistence DTOs (package-private so same-package tests can reach them) ─
-
-    /** A follow-up (question, AI-generated expected guide, candidate answer) read back from disk. */
-    record FollowUp(String question, String expected, String answer) {}
-
-    /** A question section parsed back from a saved session TXT. */
-    record LoadedQuestion(String question, String answer, List<FollowUp> followUps) {}
-
-    // Regex identifying FOLLOW-UP n: lines written by renderQuestionBlock.
-    // Deliberately strict (hyphen, digits, colon) so legacy "FOLLOW UP QUESTION ->"
-    // text inside transcripts is never mis-parsed as a follow-up marker.
-    private static final Pattern FOLLOWUP_LINE_PATTERN =
-            Pattern.compile("^\\s*FOLLOW-UP\\s+(\\d+):\\s?(.*)$");
-
-    // Optional first line of a follow-up block carrying its AI-generated guide.
-    private static final Pattern FOLLOWUP_EXPECTED_PATTERN =
-            Pattern.compile("^\\s*EXPECTED:\\s?(.*)$");
+    // Persistence DTOs and the session-file codec live in org.example.session.SessionCodec;
+    // the LLM-output record + parser live in org.example.llm.AnalysisResult.
 
     // ---- session state (FX thread only, except activeQuestion which is volatile) ----
     private AudioCapture candidateCapture;
@@ -790,9 +775,9 @@ public class InterviewApp extends Application {
         java.io.File file = chooser.showOpenDialog(primaryStage);
         if (file == null) return;
 
-        List<LoadedQuestion> sections;
+        List<SessionCodec.LoadedQuestion> sections;
         try {
-            sections = parseSessionFile(file.toPath());
+            sections = SessionCodec.parseSessionFile(file.toPath());
         } catch (IOException e) {
             log.error("Failed to read session file", e);
             showAlert("Erro ao abrir", "Não foi possível ler o arquivo:\n" + e.getMessage());
@@ -816,12 +801,12 @@ public class InterviewApp extends Application {
         }
 
         // Create one read-only panel per section; restore any follow-up rounds in order
-        for (LoadedQuestion lq : sections) {
+        for (SessionCodec.LoadedQuestion lq : sections) {
             questionCounter++;
             QuestionPanel panel = new QuestionPanel(questionCounter);
             panel.setInitialQuestion(lq.question());
             panel.setInitialAnswer(lq.answer());
-            for (FollowUp fu : lq.followUps())
+            for (SessionCodec.FollowUp fu : lq.followUps())
                 panel.addLoadedRound(fu.question(), fu.expected(), fu.answer());
             panel.markStopped();
             questionPanels.add(panel);
@@ -831,108 +816,6 @@ public class InterviewApp extends Application {
         saveSessionBtn.setDisable(false);
         log.info("Loaded {} question(s) from {}", sections.size(), file.getName());
         Platform.runLater(() -> questionsScroll.setVvalue(0.0));
-    }
-
-    private static List<LoadedQuestion> parseSessionFile(Path path) throws IOException {
-        List<LoadedQuestion> sections = new ArrayList<>();
-        List<String> currentLines = null;
-
-        for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-            if (line.matches("--- Pergunta \\d+ ---")) {
-                if (currentLines != null) sections.add(parseSection(currentLines));
-                currentLines = new ArrayList<>();
-            } else if (currentLines != null) {
-                currentLines.add(line);   // keep blanks: they separate question from answer
-            }
-        }
-        if (currentLines != null) sections.add(parseSection(currentLines));
-        return sections;
-    }
-
-    // New format: <question lines> <blank> <answer lines>. Old format (no blank
-    // line) is treated as answer-only so legacy files still load correctly.
-    // Used by parseSection for the head portion (before any FOLLOW-UP lines).
-    private static LoadedQuestion splitQuestionAnswer(List<String> lines) {
-        int firstBlank = -1;
-        for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).isBlank()) { firstBlank = i; break; }
-        }
-        if (firstBlank < 0) {
-            return new LoadedQuestion("", joinNonBlank(lines), List.of());
-        }
-        return new LoadedQuestion(
-                joinNonBlank(lines.subList(0, firstBlank)),
-                joinNonBlank(lines.subList(firstBlank + 1, lines.size())),
-                List.of());
-    }
-
-    /**
-     * Parses a question section (lines between two {@code --- Pergunta N ---} headers)
-     * into a {@link LoadedQuestion} with optional follow-up rounds.
-     *
-     * <p>Backward compatible: sections with no {@code FOLLOW-UP n:} markers produce a
-     * {@code LoadedQuestion} with an empty follow-up list, identical in question/answer
-     * content to the old single-Q/A behavior.
-     */
-    static LoadedQuestion parseSection(List<String> lines) {
-        // Step 1: locate the first FOLLOW-UP n: line
-        int fuStart = lines.size();
-        for (int i = 0; i < lines.size(); i++) {
-            if (FOLLOWUP_LINE_PATTERN.matcher(lines.get(i)).matches()) {
-                fuStart = i;
-                break;
-            }
-        }
-
-        // Step 2: parse head (initial question + answer) using existing logic
-        LoadedQuestion qa = splitQuestionAnswer(lines.subList(0, fuStart));
-
-        // Step 3: parse tail (follow-up rounds). Each block is:
-        //   FOLLOW-UP n: <question>
-        //   [EXPECTED: <guide>]     (optional; only the first content line)
-        //   <answer lines>
-        List<FollowUp> followUps = new ArrayList<>();
-        List<String> tail = lines.subList(fuStart, lines.size());
-        String currentFuQuestion = null;
-        String currentFuExpected = "";
-        List<String> currentFuAnswerLines = new ArrayList<>();
-        for (String line : tail) {
-            Matcher m = FOLLOWUP_LINE_PATTERN.matcher(line);
-            if (m.matches()) {
-                if (currentFuQuestion != null) {
-                    followUps.add(new FollowUp(currentFuQuestion, currentFuExpected,
-                            joinNonBlank(currentFuAnswerLines)));
-                }
-                currentFuQuestion = m.group(2).trim();
-                currentFuExpected = "";
-                currentFuAnswerLines = new ArrayList<>();
-            } else if (currentFuQuestion != null) {
-                Matcher em = FOLLOWUP_EXPECTED_PATTERN.matcher(line);
-                // Only the first content line of the block may be the EXPECTED guide,
-                // so an "EXPECTED:" that appears later inside the answer is left intact.
-                if (em.matches() && currentFuExpected.isEmpty() && currentFuAnswerLines.isEmpty()) {
-                    currentFuExpected = em.group(1).trim();
-                } else {
-                    currentFuAnswerLines.add(line);
-                }
-            }
-        }
-        if (currentFuQuestion != null) {
-            followUps.add(new FollowUp(currentFuQuestion, currentFuExpected,
-                    joinNonBlank(currentFuAnswerLines)));
-        }
-
-        return new LoadedQuestion(qa.question(), qa.answer(), followUps);
-    }
-
-    private static String joinNonBlank(List<String> lines) {
-        StringBuilder sb = new StringBuilder();
-        for (String s : lines) {
-            if (s.isBlank()) continue;
-            if (sb.length() > 0) sb.append(' ');
-            sb.append(s.trim());
-        }
-        return sb.toString();
     }
 
     // ── Transcript routing (STT threads → QuestionPanel) ──────────────────
@@ -954,49 +837,8 @@ public class InterviewApp extends Application {
         return txt;
     }
 
-    /**
-     * Renders one question block as text for the session TXT file.
-     *
-     * <p>Format (line terminator = {@code System.lineSeparator()}):
-     * <pre>
-     * --- Pergunta N ---
-     * &lt;question&gt;
-     *
-     * &lt;answer&gt;
-     *
-     * FOLLOW-UP 1: &lt;follow-up question&gt;
-     * EXPECTED: &lt;AI-generated guide&gt;   (omitted when blank)
-     * &lt;follow-up answer&gt;
-     * </pre>
-     *
-     * With zero follow-ups the output is byte-identical to the previous format, and a
-     * follow-up with a blank guide omits its {@code EXPECTED:} line — so files written
-     * before the guide feature still round-trip and load correctly.
-     */
-    static String renderQuestionBlock(int number, String question, String answer,
-                                      List<FollowUp> followUps) {
-        StringBuilder sb = new StringBuilder();
-        String ls = System.lineSeparator();
-        sb.append("--- Pergunta ").append(number).append(" ---").append(ls);
-        sb.append(question == null ? "" : question.trim()).append(ls);
-        sb.append(ls);
-        sb.append(answer == null ? "" : answer.trim()).append(ls);
-        if (followUps != null) {
-            for (int i = 0; i < followUps.size(); i++) {
-                FollowUp fu = followUps.get(i);
-                sb.append(ls);
-                sb.append("FOLLOW-UP ").append(i + 1).append(": ")
-                  .append(fu.question() == null ? "" : fu.question().trim()).append(ls);
-                if (fu.expected() != null && !fu.expected().isBlank()) {
-                    sb.append("EXPECTED: ").append(fu.expected().trim()).append(ls);
-                }
-                sb.append(fu.answer() == null ? "" : fu.answer().trim()).append(ls);
-            }
-        }
-        return sb.toString();
-    }
-
     // Rewrites the whole session TXT from the current panels.
+    // Block layout is owned by SessionCodec (which also round-trips it back on load).
     private void persistSessionTxt() {
         Path path = sessionTxtPath;
         if (path == null) return;
@@ -1005,11 +847,11 @@ public class InterviewApp extends Application {
         for (QuestionPanel p : questionPanels) {
             if (!first) sb.append(System.lineSeparator());
             first = false;
-            List<FollowUp> fus = new ArrayList<>();
+            List<SessionCodec.FollowUp> fus = new ArrayList<>();
             for (FollowUpRound r : p.rounds) {
-                fus.add(new FollowUp(r.question, r.expectedArea.getText(), r.answerArea.getText()));
+                fus.add(new SessionCodec.FollowUp(r.question, r.expectedArea.getText(), r.answerArea.getText()));
             }
-            sb.append(renderQuestionBlock(p.number,
+            sb.append(SessionCodec.renderQuestionBlock(p.number,
                     p.questionArea.getText(), p.answerArea.getText(), fus));
         }
         try {
@@ -1187,74 +1029,7 @@ public class InterviewApp extends Application {
         return msg;
     }
 
-    // ── Star rating (parsed from the AI's trailing "RATING: n/max" line) ──────
-
-    private static final Pattern RATING_PATTERN =
-            Pattern.compile("(?im)^\\s*RATING:\\s*(\\d+)\\s*/\\s*(\\d+)\\s*$");
-
-    /** Returns {score, max}; score is -1 when no RATING line is present. */
-    private static int[] parseRating(String text, int fallbackMax) {
-        Matcher m = RATING_PATTERN.matcher(text);
-        if (m.find()) return new int[]{ Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)) };
-        return new int[]{ -1, fallbackMax };
-    }
-
-    private static String stripRatingLine(String text) {
-        return text.replaceAll("(?im)^\\s*RATING:\\s*\\d+\\s*/\\s*\\d+\\s*$", "").trim();
-    }
-
-    // Leading [\s>#*_-]* tolerates markdown the model may wrap the header in
-    // (e.g. GPT-OSS emits "**FOLLOW-UP QUESTIONS:**"); the trailing \b.*$ makes the
-    // colon optional and swallows any trailing "**". Without this the whole follow-up
-    // block leaks into the analysis body and no radios appear.
-    private static final Pattern FOLLOWUP_HEADER_PATTERN =
-            Pattern.compile("(?im)^[\\s>#*_-]*FOLLOW-?\\s?UP\\s+QUESTIONS\\b.*$");
-
-    // package-private for FollowUpParsingTest
-    static List<String> parseFollowUps(String text) {
-        Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
-        if (!m.find()) return List.of();
-        String after = text.substring(m.end());
-        List<String> result = new ArrayList<>();
-        for (String line : after.split("\\R")) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty()) continue;
-            if (trimmed.toLowerCase().startsWith("rating:")) break;
-            String stripped = trimmed
-                    .replaceFirst("^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "")  // bullet / number prefix
-                    .replaceAll("^\\*+|\\*+$", "")                          // surrounding **markdown**
-                    .trim();
-            if (!stripped.isEmpty()) result.add(stripped);
-        }
-        return result;
-    }
-
-    private static String stripFollowUpSection(String text) {
-        Matcher m = FOLLOWUP_HEADER_PATTERN.matcher(text);
-        if (m.find()) return text.substring(0, m.start());
-        return text;
-    }
-
-    private static String renderStars(int score, int max) {
-        if (score < 0 || max <= 0) return "";
-        int s = Math.max(0, Math.min(score, max));
-        StringBuilder sb = new StringBuilder();
-        for (int i = 1; i <= max; i++) sb.append(i <= s ? '★' : '☆');
-        return sb.append("  ").append(s).append('/').append(max)
-                 .append(" — ").append(levelLabel(s, max)).toString();
-    }
-
-    // Maps a score onto the 5 named bands, proportionally for any scale (5 or 10).
-    private static String levelLabel(int score, int max) {
-        int level = Math.max(1, Math.min(5, (int) Math.ceil(score * 5.0 / max)));
-        return switch (level) {
-            case 1 -> "Unsatisfactory";
-            case 2 -> "Needs Improvement";
-            case 3 -> "Satisfactory";
-            case 4 -> "Very Good";
-            default -> "Excellent";
-        };
-    }
+    // Star-rating and follow-up parsing of the AI's reply live in org.example.llm.AnalysisResult.
 
     private void onWindowClose() { if (sessionRunning) stopSession(); }
 
@@ -1321,8 +1096,9 @@ public class InterviewApp extends Application {
             questionArea.setPrefRowCount(8);
 
             // Each column starts with the initial area; confirming a follow-up appends
-            // a divider + labelled section to all three (see addRound). The whole panel
-            // scrolls in the outer questions scroll pane, so the stacks grow freely.
+            // a divider + labelled section to all three (see addRound). Each column
+            // scrolls internally (see column()), so the columns row keeps a fixed,
+            // user-resizable height instead of growing the whole panel unboundedly.
             questionStack = new VBox(6, questionArea);
             expectedStack = new VBox(6, expectedArea);
             answerStack   = new VBox(6, answerArea);
@@ -1437,10 +1213,11 @@ public class InterviewApp extends Application {
             currentSink = answerArea;
 
             // ── Content layout (Order invariant) ─────────────────────────────
-            // 1. columns (grow with follow-up sections)  2. live preview  3. buttons/rating
-            // 4. analysis (resizable)  5. follow-up radios (resizable)
+            // 1. columns (resizable — drag the handle to trade height with the analysis)
+            // 2. live preview  3. buttons/rating  4. analysis (resizable)
+            // 5. follow-up radios (resizable)
             VBox content = new VBox(6,
-                    columns,
+                    wrapResizableRow(columns, 260),
                     partialLabel,
                     buttons,
                     new Separator(),
@@ -1460,7 +1237,16 @@ public class InterviewApp extends Application {
         // sections (initial area + one per follow-up). A small min width lets dividers
         // be dragged narrow without letting a column collapse to nothing.
         private VBox column(String labelText, VBox stack) {
-            VBox col = new VBox(4, sectionLabel(labelText), stack);
+            // Each column scrolls internally so the whole columns row can be dragged
+            // shorter than its content (e.g. after several follow-up rounds) via the
+            // resize handle below it, without the SplitPane clipping the lower rounds.
+            ScrollPane scroll = new ScrollPane(stack);
+            scroll.setFitToWidth(true);
+            scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            scroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+            scroll.getStyleClass().add("flat-scroll");
+            VBox.setVgrow(scroll, Priority.ALWAYS);
+            VBox col = new VBox(4, sectionLabel(labelText), scroll);
             col.setMinWidth(60);
             return col;
         }
@@ -1774,13 +1560,11 @@ public class InterviewApp extends Application {
                 try {
                     String result = GroqClient.evaluateExchange(
                             provider, key, question, expected, candidate, turns, name, sex, scale, jobDesc);
-                    int[] rating           = parseRating(result, scale);
-                    List<String> followUps = parseFollowUps(result);
-                    String body            = stripRatingLine(stripFollowUpSection(result));
+                    AnalysisResult analysis = AnalysisResult.parse(result, scale);
                     Platform.runLater(() -> {
-                        analysisArea.setText(body);
-                        ratingLabel.setText(renderStars(rating[0], rating[1]));
-                        showFollowUpOptions(followUps);
+                        analysisArea.setText(analysis.prose());
+                        ratingLabel.setText(analysis.stars());
+                        showFollowUpOptions(analysis.followUps());
                         resetAnalyzeBtn();
                     });
                 } catch (Exception ex) {

@@ -260,7 +260,9 @@ public class GroqClient {
                 gaps, vague spots, or claims worth pressing on, kept relevant to the role. \
                 Output them in a dedicated section starting with a line containing exactly \
                 FOLLOW-UP QUESTIONS: followed by each follow-up question on its own line \
-                prefixed with "- ". After the follow-up questions block, output the score for \
+                prefixed with "- ". That header line must be exactly FOLLOW-UP QUESTIONS: on \
+                its own line — no lead-in sentence such as "Here are", no numbering and no \
+                markdown before it. After the follow-up questions block, output the score for \
                 the whole exchange on its own very last line in exactly this format, with no \
                 extra words: RATING: n/%d
                 """.formatted(whoLine(candidateName, gender), jobSection(jobDescription),
