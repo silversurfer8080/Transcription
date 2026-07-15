@@ -34,6 +34,7 @@ import org.example.llm.GroqClient;
 import org.example.llm.LlmProvider;
 import org.example.session.SessionCodec;
 import org.example.stt.GeminiSttProvider;
+import org.example.stt.GroqWhisperModel;
 import org.example.stt.GroqWhisperProvider;
 import org.example.stt.SpeechToTextProvider;
 import org.example.stt.SttEngine;
@@ -121,6 +122,8 @@ public class InterviewApp extends Application {
     private ComboBox<LlmProvider> llmProviderCombo;   // which analysis backend
     private TextField voskModelField;        // local Vosk model directory (STT only)
     private HBox voskModelRow;               // shown only when Vosk is the STT engine
+    private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
+    private HBox groqModelRow;               // shown only when Groq is the STT engine
     private TextField companyField;
     private TextField candidateField;
     private TextField jobField;
@@ -179,7 +182,7 @@ public class InterviewApp extends Application {
         sttEngineCombo = new ComboBox<>(FXCollections.observableArrayList(SttEngine.values()));
         sttEngineCombo.setValue(SttEngine.VOSK);   // the unlimited, offline default
         sttEngineCombo.setStyle(FORM_FONT_STYLE);
-        sttEngineCombo.setOnAction(e -> updateVoskRowVisibility());
+        sttEngineCombo.setOnAction(e -> updateSttModelRows());
 
         llmProviderCombo = new ComboBox<>(FXCollections.observableArrayList(LlmProvider.values()));
         llmProviderCombo.setValue(LlmProvider.GEMINI);   // most generous free tier
@@ -222,7 +225,17 @@ public class InterviewApp extends Application {
 
         voskModelRow = new HBox(8, formLabel("Modelo Vosk:"), voskModelField, voskBrowseBtn, voskDownloadBtn);
         voskModelRow.setAlignment(Pos.CENTER_LEFT);
-        updateVoskRowVisibility();
+
+        // ── Groq Whisper model row (shown only when Groq is the STT engine) ─────
+        whisperModelCombo = new ComboBox<>(FXCollections.observableArrayList(GroqWhisperModel.values()));
+        whisperModelCombo.setValue(GroqWhisperModel.TURBO);   // fast default; pick Large-v3 for strong accents
+        whisperModelCombo.setStyle(FORM_FONT_STYLE);
+        Label whisperHint = new Label("(Large-v3 = melhor com sotaque forte)");
+        whisperHint.getStyleClass().add("hint-label");
+        groqModelRow = new HBox(8, formLabel("Modelo Whisper:"), whisperModelCombo, whisperHint);
+        groqModelRow.setAlignment(Pos.CENTER_LEFT);
+
+        updateSttModelRows();
 
         // ── Row 2: name + job + company + sex + stars ────────────────────────
         candidateField = new TextField();
@@ -326,7 +339,7 @@ public class InterviewApp extends Application {
                 vertSep, fontLabel, fontDecBtn, fontIncBtn);
         row4.setAlignment(Pos.CENTER_LEFT);
 
-        VBox controls = new VBox(8, keysPane, row1, voskModelRow, row2, row3, row4);
+        VBox controls = new VBox(8, keysPane, row1, voskModelRow, groqModelRow, row2, row3, row4);
         controls.setPadding(new Insets(10));
 
         // ── Questions scroll area ────────────────────────────────────────────
@@ -375,12 +388,18 @@ public class InterviewApp extends Application {
                 "Flocareer", "models", "vosk-model-small-en-us-0.15").toString();
     }
 
-    /** The Vosk model row is only relevant when Vosk is the selected STT engine. */
-    private void updateVoskRowVisibility() {
-        boolean vosk = sttEngineCombo.getValue() == SttEngine.VOSK;
+    /** Shows the model row relevant to the selected STT engine (Vosk dir / Groq model). */
+    private void updateSttModelRows() {
+        SttEngine engine = sttEngineCombo.getValue();
+        boolean vosk = engine == SttEngine.VOSK;
+        boolean groq = engine == SttEngine.GROQ_WHISPER;
         if (voskModelRow != null) {
             voskModelRow.setVisible(vosk);
             voskModelRow.setManaged(vosk);   // collapse layout space when hidden
+        }
+        if (groqModelRow != null) {
+            groqModelRow.setVisible(groq);
+            groqModelRow.setManaged(groq);
         }
     }
 
@@ -505,7 +524,7 @@ public class InterviewApp extends Application {
                     showAlert("Chave Groq ausente", "Informe a Groq API key para usar o Whisper.");
                     yield null;
                 }
-                yield new GroqWhisperProvider(key, channelId);
+                yield new GroqWhisperProvider(key, channelId, whisperModelCombo.getValue().modelId());
             }
             case GEMINI -> {
                 String key = geminiKeyField.getText().trim();
