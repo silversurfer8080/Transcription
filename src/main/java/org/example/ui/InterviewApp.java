@@ -34,6 +34,7 @@ import org.example.llm.GroqClient;
 import org.example.llm.LlmProvider;
 import org.example.session.SessionCodec;
 import org.example.stt.GeminiSttProvider;
+import org.example.stt.GroqRateLimit;
 import org.example.stt.GroqWhisperModel;
 import org.example.stt.GroqWhisperProvider;
 import org.example.stt.SpeechToTextProvider;
@@ -124,6 +125,11 @@ public class InterviewApp extends Application {
     private HBox voskModelRow;               // shown only when Vosk is the STT engine
     private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
     private HBox groqModelRow;               // shown only when Groq is the STT engine
+    // Live Groq quota gauge (fed by GroqWhisperProvider's rate-limit headers)
+    private ProgressBar groqReqBar;
+    private ProgressBar groqAudBar;
+    private Label groqReqValue;
+    private Label groqAudValue;
     private TextField companyField;
     private TextField candidateField;
     private TextField jobField;
@@ -230,9 +236,12 @@ public class InterviewApp extends Application {
         whisperModelCombo = new ComboBox<>(FXCollections.observableArrayList(GroqWhisperModel.values()));
         whisperModelCombo.setValue(GroqWhisperModel.TURBO);   // fast default; pick Large-v3 for strong accents
         whisperModelCombo.setStyle(FORM_FONT_STYLE);
-        Label whisperHint = new Label("(Large-v3 = melhor com sotaque forte)");
-        whisperHint.getStyleClass().add("hint-label");
-        groqModelRow = new HBox(8, formLabel("Modelo Whisper:"), whisperModelCombo, whisperHint);
+        whisperModelCombo.setTooltip(new Tooltip(
+                "Large-v3 = mais preciso com sotaque forte; Turbo = mais rápido"));
+        Region groqSpacer = new Region();
+        HBox.setHgrow(groqSpacer, Priority.ALWAYS);
+        groqModelRow = new HBox(8, formLabel("Modelo Whisper:"), whisperModelCombo,
+                groqSpacer, buildGroqQuotaGauge());
         groqModelRow.setAlignment(Pos.CENTER_LEFT);
 
         updateSttModelRows();
@@ -403,6 +412,80 @@ public class InterviewApp extends Application {
         }
     }
 
+    // ── Groq quota gauge ──────────────────────────────────────────────────
+
+    /** Two thin bars (requests/day, audio-seconds/hour) with the remaining/limit numbers. */
+    private Node buildGroqQuotaGauge() {
+        groqReqValue = new Label("—");
+        groqAudValue = new Label("—");
+        groqReqBar = quotaBar();
+        groqAudBar = quotaBar();
+        VBox box = new VBox(3,
+                quotaRow("req/dia", groqReqBar, groqReqValue),
+                quotaRow("áudio/h", groqAudBar, groqAudValue));
+        box.setAlignment(Pos.CENTER_LEFT);
+        Tooltip.install(box, new Tooltip(
+                "Cota gratuita do Groq restante (lida dos cabeçalhos da resposta).\n"
+                + "Verde = folgado, vermelho = quase no limite. Zera → HTTP 429."));
+        return box;
+    }
+
+    private ProgressBar quotaBar() {
+        ProgressBar bar = new ProgressBar(1.0);
+        bar.setPrefWidth(90);
+        bar.setMinHeight(10);
+        bar.setPrefHeight(10);
+        bar.setStyle("-fx-accent: " + quotaColor(1.0) + ";");
+        return bar;
+    }
+
+    private HBox quotaRow(String tag, ProgressBar bar, Label value) {
+        Label t = new Label(tag);
+        t.getStyleClass().add("quota-tag");
+        t.setMinWidth(52);
+        value.getStyleClass().add("quota-value");
+        value.setMinWidth(78);
+        HBox row = new HBox(6, t, bar, value);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    /** Updates the gauge from a Groq rate-limit reading (called on the FX thread). */
+    private void updateGroqQuota(GroqRateLimit rl) {
+        if (rl.hasRequests()) {
+            double f = rl.requestsFraction();
+            groqReqBar.setProgress(f);
+            groqReqBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
+            groqReqValue.setText(fmtQuota(rl.remainingRequests()) + "/" + fmtQuota(rl.limitRequests()));
+        }
+        if (rl.hasAudio()) {
+            double f = rl.audioFraction();
+            groqAudBar.setProgress(f);
+            groqAudBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
+            groqAudValue.setText(fmtQuota(rl.remainingAudioSeconds()) + "/"
+                    + fmtQuota(rl.limitAudioSeconds()) + "s");
+        }
+    }
+
+    private static String fmtQuota(double v) {
+        return String.valueOf(Math.round(v));
+    }
+
+    // Interpolates green (full) → amber (half) → red (empty) for the given remaining fraction.
+    private static String quotaColor(double frac) {
+        frac = Math.max(0.0, Math.min(1.0, frac));
+        Color green = Color.web("#16A34A");
+        Color amber = Color.web("#F59E0B");
+        Color red   = Color.web("#DC2626");
+        Color c = (frac >= 0.5)
+                ? amber.interpolate(green, (frac - 0.5) * 2)
+                : red.interpolate(amber, frac * 2);
+        return String.format("#%02X%02X%02X",
+                (int) Math.round(c.getRed()   * 255),
+                (int) Math.round(c.getGreen() * 255),
+                (int) Math.round(c.getBlue()  * 255));
+    }
+
     private void onBrowseVoskModel() {
         DirectoryChooser dc = new DirectoryChooser();
         dc.setTitle("Selecione a pasta do modelo Vosk");
@@ -524,7 +607,10 @@ public class InterviewApp extends Application {
                     showAlert("Chave Groq ausente", "Informe a Groq API key para usar o Whisper.");
                     yield null;
                 }
-                yield new GroqWhisperProvider(key, channelId, whisperModelCombo.getValue().modelId());
+                GroqWhisperProvider groq =
+                        new GroqWhisperProvider(key, channelId, whisperModelCombo.getValue().modelId());
+                groq.setRateLimitListener(rl -> Platform.runLater(() -> updateGroqQuota(rl)));
+                yield groq;
             }
             case GEMINI -> {
                 String key = geminiKeyField.getText().trim();
