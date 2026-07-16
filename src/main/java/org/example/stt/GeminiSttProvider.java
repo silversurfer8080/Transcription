@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.example.usage.ApiKind;
+import org.example.usage.RateLimit;
+import org.example.usage.UsageEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,6 +15,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Base64;
+import java.util.function.Consumer;
 
 /**
  * Free-tier speech-to-text via Google Gemini's multimodal
@@ -39,6 +43,8 @@ public class GeminiSttProvider extends BatchWindowSttProvider {
     private static final String API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
     private static final String DEFAULT_MODEL = "gemini-2.5-flash";
     private static final long DEFAULT_FLUSH_MS = 15_000;
+    // Canonical capture format is 16 kHz mono 16-bit → 32000 bytes per audio-second.
+    private static final int BYTES_PER_SECOND = 16_000 * 2;
 
     // Kept package-private so tests can assert the request carries the instruction.
     static final String PROMPT =
@@ -49,6 +55,16 @@ public class GeminiSttProvider extends BatchWindowSttProvider {
     private final String apiKey;
     private final String model;
     private HttpClient httpClient;
+    private volatile Consumer<UsageEvent> usageListener;   // optional; fired per response
+
+    /**
+     * Registers a listener notified with a {@link UsageEvent} for each response: requests +1
+     * and the clip's audio-seconds. Gemini sends no rate-limit headers, so the event carries
+     * an empty {@link RateLimit} (usage counters only). Fired on the flush thread.
+     */
+    public void setUsageListener(Consumer<UsageEvent> listener) {
+        this.usageListener = listener;
+    }
 
     public GeminiSttProvider(String apiKey, String channelId) {
         this(apiKey, channelId, DEFAULT_MODEL, DEFAULT_FLUSH_MS);
@@ -79,6 +95,14 @@ public class GeminiSttProvider extends BatchWindowSttProvider {
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        Consumer<UsageEvent> listener = usageListener;
+        if (listener != null) {
+            double audioSeconds = pcm.length / (double) BYTES_PER_SECOND;
+            RateLimit rl = RateLimit.parse(response.headers(), ApiKind.STT);   // empty for Gemini
+            listener.accept(new UsageEvent("Gemini", ApiKind.STT, 1, audioSeconds, rl));
+        }
+
         if (response.statusCode() == 200) {
             return extractText(response.body());
         }

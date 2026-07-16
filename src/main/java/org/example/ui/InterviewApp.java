@@ -34,9 +34,13 @@ import org.example.llm.GroqClient;
 import org.example.llm.LlmProvider;
 import org.example.session.SessionCodec;
 import org.example.stt.GeminiSttProvider;
-import org.example.stt.GroqRateLimit;
 import org.example.stt.GroqWhisperModel;
 import org.example.stt.GroqWhisperProvider;
+import org.example.usage.ApiKind;
+import org.example.usage.ApiUsage;
+import org.example.usage.RateLimit;
+import org.example.usage.UsageEvent;
+import org.example.usage.UsageTracker;
 import org.example.stt.SpeechToTextProvider;
 import org.example.stt.SttEngine;
 import org.example.stt.TranscriptEvent;
@@ -130,6 +134,11 @@ public class InterviewApp extends Application {
     private ProgressBar groqAudBar;
     private Label groqReqValue;
     private Label groqAudValue;
+    // Cross-API usage tracking (STT + LLM), shown live and in the Métricas tab
+    private final UsageTracker usageTracker = new UsageTracker();
+    private ProgressBar llmReqBar;   // live indicator for the active analysis provider
+    private Label llmValue;
+    private GridPane metricsGrid;    // repopulated from the tracker on each event
     private TextField companyField;
     private TextField candidateField;
     private TextField jobField;
@@ -154,8 +163,17 @@ public class InterviewApp extends Application {
             if (is != null) stage.getIcons().add(new Image(is));
         } catch (Exception ignored) {}
 
-        Region root = (Region) buildInterviewTabContent();
-        Scene scene = new Scene(root, 820, 700);
+        // App-wide LLM usage feed → the tracker (marshalled onto the FX thread).
+        GroqClient.setUsageListener(ev -> Platform.runLater(() -> onUsage(ev)));
+
+        Tab interviewTab = new Tab("Entrevista", buildInterviewTabContent());
+        Tab metricsTab   = new Tab("Métricas", buildMetricsTabContent());
+        interviewTab.setClosable(false);
+        metricsTab.setClosable(false);
+        TabPane tabs = new TabPane(interviewTab, metricsTab);
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        Scene scene = new Scene(tabs, 820, 700);
         applyStylesheet(scene);
         stage.setScene(scene);
         stage.setAlwaysOnTop(false);
@@ -205,7 +223,7 @@ public class InterviewApp extends Application {
 
         HBox row1 = new HBox(8,
                 formLabel("Transcrição:"), sttEngineCombo,
-                formLabel("Análise:"), llmProviderCombo,
+                formLabel("Análise:"), llmProviderCombo, buildLlmLiveIndicator(),
                 spacer, powerBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
 
@@ -460,20 +478,20 @@ public class InterviewApp extends Application {
                 () -> "-fx-font-size: " + fontSize.get() + "px;", fontSize));
     }
 
-    /** Updates the gauge from a Groq rate-limit reading (called on the FX thread). */
-    private void updateGroqQuota(GroqRateLimit rl) {
+    /** Updates the live Groq STT gauge from a rate-limit reading (called on the FX thread). */
+    private void updateGroqQuota(RateLimit rl) {
         if (rl.hasRequests()) {
             double f = rl.requestsFraction();
             groqReqBar.setProgress(f);
             groqReqBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
             groqReqValue.setText(fmtQuota(rl.remainingRequests()) + "/" + fmtQuota(rl.limitRequests()));
         }
-        if (rl.hasAudio()) {
-            double f = rl.audioFraction();
+        if (rl.hasSecondary()) {
+            double f = rl.secondaryFraction();
             groqAudBar.setProgress(f);
             groqAudBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
-            groqAudValue.setText(fmtQuota(rl.remainingAudioSeconds()) + "/"
-                    + fmtQuota(rl.limitAudioSeconds()) + "s");
+            groqAudValue.setText(fmtQuota(rl.remainingSecondary()) + "/"
+                    + fmtQuota(rl.limitSecondary()) + "s");
         }
     }
 
@@ -494,6 +512,130 @@ public class InterviewApp extends Application {
                 (int) Math.round(c.getRed()   * 255),
                 (int) Math.round(c.getGreen() * 255),
                 (int) Math.round(c.getBlue()  * 255));
+    }
+
+    // ── Live LLM indicator + cross-API usage tracking ─────────────────────
+
+    /** Compact live indicator for the active analysis (LLM) provider, shown in row 1. */
+    private Node buildLlmLiveIndicator() {
+        llmReqBar = quotaBar();
+        llmReqBar.setPrefWidth(90);
+        llmReqBar.setMaxWidth(90);
+        HBox.setHgrow(llmReqBar, Priority.NEVER);
+        llmReqBar.setVisible(false);
+        llmReqBar.setManaged(false);
+        llmValue = new Label("análise: —");
+        llmValue.getStyleClass().add("quota-value");
+        bindQuotaFont(llmValue);
+        HBox box = new HBox(6, llmReqBar, llmValue);
+        box.setAlignment(Pos.CENTER_LEFT);
+        Tooltip.install(box, new Tooltip(
+                "Uso ao vivo do provedor de análise ativo.\n"
+                + "Groq/Cerebras mostram requisições restantes; Gemini mostra tokens usados."));
+        return box;
+    }
+
+    /** Records a usage event and refreshes the live indicators + the Métricas tab (FX thread). */
+    private void onUsage(UsageEvent ev) {
+        usageTracker.record(ev);
+        if (ev.kind() == ApiKind.STT && "Groq".equals(ev.provider()) && ev.rateLimit().hasData()) {
+            updateGroqQuota(ev.rateLimit());
+        }
+        if (ev.kind() == ApiKind.LLM) {
+            ApiUsage active = usageTracker.get(llmProviderCombo.getValue().shortName(), ApiKind.LLM);
+            if (active != null) updateLlmLive(active);
+        }
+        refreshMetrics();
+    }
+
+    // Row-1 LLM indicator: a remaining-requests bar (Groq/Cerebras) or a usage label (Gemini).
+    private void updateLlmLive(ApiUsage u) {
+        RateLimit rl = u.latest();
+        if (rl.hasRequests()) {
+            double f = rl.requestsFraction();
+            llmReqBar.setProgress(f);
+            llmReqBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
+            llmReqBar.setVisible(true);
+            llmReqBar.setManaged(true);
+            llmValue.setText(fmtQuota(rl.remainingRequests()) + "/" + fmtQuota(rl.limitRequests())
+                    + " req · " + fmtQuota(u.totalSecondary()) + " tok");
+        } else {
+            llmReqBar.setVisible(false);
+            llmReqBar.setManaged(false);
+            llmValue.setText(u.totalRequests() + " req · " + fmtQuota(u.totalSecondary()) + " tok");
+        }
+    }
+
+    // ── Métricas tab ──────────────────────────────────────────────────────
+
+    private Node buildMetricsTabContent() {
+        Label title = new Label("Uso das APIs nesta sessão");
+        title.getStyleClass().add("section-label");
+        Label note = new Label("Restante = lido dos cabeçalhos de cota (Groq/Cerebras). "
+                + "Gemini/Vosk não expõem restante — mostram só o uso acumulado. "
+                + "Os totais zeram ao reiniciar o app.");
+        note.setWrapText(true);
+        note.getStyleClass().add("source-label");
+
+        metricsGrid = new GridPane();
+        metricsGrid.setHgap(16);
+        metricsGrid.setVgap(8);
+        refreshMetrics();
+
+        VBox box = new VBox(12, title, note, new Separator(), metricsGrid);
+        box.setPadding(new Insets(16));
+        ScrollPane scroll = new ScrollPane(box);
+        scroll.setFitToWidth(true);
+        scroll.getStyleClass().add("flat-scroll");
+        return scroll;
+    }
+
+    /** Rebuilds the metrics grid from the tracker (few rows, so a full rebuild is fine). */
+    private void refreshMetrics() {
+        if (metricsGrid == null) return;
+        metricsGrid.getChildren().clear();
+        String[] headers = {"API", "Tipo", "Restante", "Requisições (sessão)", "Uso (sessão)"};
+        for (int c = 0; c < headers.length; c++) {
+            Label h = new Label(headers[c]);
+            h.getStyleClass().add("section-label");
+            metricsGrid.add(h, c, 0);
+        }
+        int r = 1;
+        for (ApiUsage u : usageTracker.all()) {
+            metricsGrid.add(metricLabel(u.provider(), true), 0, r);
+            metricsGrid.add(metricLabel(u.kind().label(), false), 1, r);
+            metricsGrid.add(metricRemaining(u), 2, r);
+            metricsGrid.add(metricLabel(String.valueOf(u.totalRequests()), false), 3, r);
+            metricsGrid.add(metricLabel(fmtQuota(u.totalSecondary()) + " " + u.kind().shortUnit(), false), 4, r);
+            r++;
+        }
+        if (r == 1) {
+            Label empty = new Label("Nenhuma chamada ainda. Os dados aparecem ao usar Groq/Gemini.");
+            empty.getStyleClass().add("source-label");
+            metricsGrid.add(empty, 0, 1, headers.length, 1);
+        }
+    }
+
+    private Label metricLabel(String text, boolean strong) {
+        Label l = new Label(text);
+        l.getStyleClass().add(strong ? "quota-tag" : "quota-value");
+        bindQuotaFont(l);
+        return l;
+    }
+
+    // A remaining-quota cell: a bar + numbers when the provider exposes limits, else "—".
+    private Node metricRemaining(ApiUsage u) {
+        RateLimit rl = u.latest();
+        if (!rl.hasRequests()) return metricLabel("—", false);
+        double f = rl.requestsFraction();
+        ProgressBar bar = new ProgressBar(f);
+        bar.setPrefWidth(120);
+        bar.setMinHeight(16);
+        bar.setStyle("-fx-accent: " + quotaColor(f) + ";");
+        Label v = metricLabel(fmtQuota(rl.remainingRequests()) + "/" + fmtQuota(rl.limitRequests()) + " req", false);
+        HBox row = new HBox(6, bar, v);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
     private void onBrowseVoskModel() {
@@ -619,7 +761,7 @@ public class InterviewApp extends Application {
                 }
                 GroqWhisperProvider groq =
                         new GroqWhisperProvider(key, channelId, whisperModelCombo.getValue().modelId());
-                groq.setRateLimitListener(rl -> Platform.runLater(() -> updateGroqQuota(rl)));
+                groq.setUsageListener(ev -> Platform.runLater(() -> onUsage(ev)));
                 yield groq;
             }
             case GEMINI -> {
@@ -628,7 +770,9 @@ public class InterviewApp extends Application {
                     showAlert("Chave Gemini ausente", "Informe a Gemini API key para a transcrição.");
                     yield null;
                 }
-                yield new GeminiSttProvider(key, channelId);
+                GeminiSttProvider gemini = new GeminiSttProvider(key, channelId);
+                gemini.setUsageListener(ev -> Platform.runLater(() -> onUsage(ev)));
+                yield gemini;
             }
         };
     }

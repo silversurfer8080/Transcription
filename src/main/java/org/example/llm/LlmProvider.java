@@ -32,26 +32,28 @@ package org.example.llm;
  */
 public enum LlmProvider {
 
-    GROQ("Groq — Llama 3.3 70B",
+    GROQ("Groq", "Groq — Llama 3.3 70B",
             "https://api.groq.com/openai/v1/chat/completions",
             "llama-3.3-70b-versatile", null, 1280),
 
-    GEMINI("Google Gemini — 2.5 Flash",
+    GEMINI("Gemini", "Google Gemini — 2.5 Flash",
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             "gemini-2.5-flash", "none", 1280),
 
-    CEREBRAS("Cerebras — GPT-OSS 120B",
+    CEREBRAS("Cerebras", "Cerebras — GPT-OSS 120B",
             "https://api.cerebras.ai/v1/chat/completions",
             "gpt-oss-120b", "low", 2500);
 
+    private final String shortName;
     private final String label;
     private final String endpoint;
     private final String defaultModel;
     private final String reasoningEffort;   // OpenAI-compat reasoning_effort; null = omit
     private final int maxTokens;
 
-    LlmProvider(String label, String endpoint, String defaultModel,
+    LlmProvider(String shortName, String label, String endpoint, String defaultModel,
                 String reasoningEffort, int maxTokens) {
+        this.shortName = shortName;
         this.label = label;
         this.endpoint = endpoint;
         this.defaultModel = defaultModel;
@@ -59,6 +61,8 @@ public enum LlmProvider {
         this.maxTokens = maxTokens;
     }
 
+    /** Short vendor name ("Groq"/"Gemini"/"Cerebras"), used as the usage-metrics row key. */
+    public String shortName()       { return shortName; }
     public String label()           { return label; }
     public String endpoint()        { return endpoint; }
     public String defaultModel()    { return defaultModel; }
