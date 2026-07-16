@@ -238,10 +238,9 @@ public class InterviewApp extends Application {
         whisperModelCombo.setStyle(FORM_FONT_STYLE);
         whisperModelCombo.setTooltip(new Tooltip(
                 "Large-v3 = mais preciso com sotaque forte; Turbo = mais rápido"));
-        Region groqSpacer = new Region();
-        HBox.setHgrow(groqSpacer, Priority.ALWAYS);
-        groqModelRow = new HBox(8, formLabel("Modelo Whisper:"), whisperModelCombo,
-                groqSpacer, buildGroqQuotaGauge());
+        Node groqQuotaGauge = buildGroqQuotaGauge();
+        HBox.setHgrow(groqQuotaGauge, Priority.ALWAYS);   // gauge fills the spare width
+        groqModelRow = new HBox(12, formLabel("Modelo Whisper:"), whisperModelCombo, groqQuotaGauge);
         groqModelRow.setAlignment(Pos.CENTER_LEFT);
 
         updateSttModelRows();
@@ -424,6 +423,7 @@ public class InterviewApp extends Application {
                 quotaRow("req/dia", groqReqBar, groqReqValue),
                 quotaRow("áudio/h", groqAudBar, groqAudValue));
         box.setAlignment(Pos.CENTER_LEFT);
+        box.setMaxWidth(Double.MAX_VALUE);   // stretch across the spare row width
         Tooltip.install(box, new Tooltip(
                 "Cota gratuita do Groq restante (lida dos cabeçalhos da resposta).\n"
                 + "Verde = folgado, vermelho = quase no limite. Zera → HTTP 429."));
@@ -432,9 +432,11 @@ public class InterviewApp extends Application {
 
     private ProgressBar quotaBar() {
         ProgressBar bar = new ProgressBar(1.0);
-        bar.setPrefWidth(90);
-        bar.setMinHeight(10);
-        bar.setPrefHeight(10);
+        bar.setPrefWidth(200);
+        bar.setMinHeight(18);
+        bar.setPrefHeight(18);
+        HBox.setHgrow(bar, Priority.ALWAYS);   // let it use the spare space in the row
+        bar.setMaxWidth(Double.MAX_VALUE);
         bar.setStyle("-fx-accent: " + quotaColor(1.0) + ";");
         return bar;
     }
@@ -443,11 +445,19 @@ public class InterviewApp extends Application {
         Label t = new Label(tag);
         t.getStyleClass().add("quota-tag");
         t.setMinWidth(52);
+        bindQuotaFont(t);
         value.getStyleClass().add("quota-value");
-        value.setMinWidth(78);
-        HBox row = new HBox(6, t, bar, value);
+        value.setMinWidth(90);
+        bindQuotaFont(value);
+        HBox row = new HBox(8, t, bar, value);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    // Scales the gauge text with the A−/A+ zoom control, like the transcript areas.
+    private void bindQuotaFont(Label l) {
+        l.styleProperty().bind(Bindings.createStringBinding(
+                () -> "-fx-font-size: " + fontSize.get() + "px;", fontSize));
     }
 
     /** Updates the gauge from a Groq rate-limit reading (called on the FX thread). */
