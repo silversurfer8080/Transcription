@@ -13,6 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Free-tier speech-to-text via Groq's Whisper endpoint
@@ -46,6 +47,7 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
     private final String model;
     private final String language;   // ISO code (e.g. "en"); null/blank → Whisper auto-detects
     private HttpClient httpClient;
+    private volatile Consumer<GroqRateLimit> rateLimitListener;   // optional; fired per response
 
     public GroqWhisperProvider(String apiKey, String channelId) {
         this(apiKey, channelId, "en", DEFAULT_MODEL, DEFAULT_FLUSH_MS);
@@ -62,6 +64,14 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
         this.apiKey = apiKey;
         this.language = language;
         this.model = model;
+    }
+
+    /**
+     * Registers a listener notified with the remaining quota parsed from each Groq response
+     * (both success and 429). Fired on the flush thread — marshal to the UI thread yourself.
+     */
+    public void setRateLimitListener(Consumer<GroqRateLimit> listener) {
+        this.rateLimitListener = listener;
     }
 
     @Override protected String providerName() { return "Groq Whisper provider"; }
@@ -83,6 +93,14 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        // Surface remaining quota from the rate-limit headers (present on 200 and 429).
+        Consumer<GroqRateLimit> listener = rateLimitListener;
+        if (listener != null) {
+            GroqRateLimit quota = GroqRateLimit.parse(response.headers());
+            if (quota.hasData()) listener.accept(quota);
+        }
+
         if (response.statusCode() == 200) {
             return extractText(response.body());
         }

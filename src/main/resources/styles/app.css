@@ -50,6 +50,11 @@
 }
 .rating-label { -fx-text-fill: -app-amber; -fx-font-size: 16px; -fx-font-weight: 700; }
 
+/* Live Groq quota gauge — labels beside the two remaining-quota bars.
+   Font size is bound to the A−/A+ zoom control inline, so it is not set here. */
+.quota-tag   { -fx-text-fill: -app-text-muted; -fx-font-weight: 700; }
+.quota-value { -fx-text-fill: -app-text-muted; }
+
 /* Transparent, edge-to-edge scroll pane (used for the resizable follow-up radios). */
 .flat-scroll, .flat-scroll > .viewport { -fx-background-color: transparent; }
 .flat-scroll { -fx-padding: 0; -fx-background-insets: 0; }
