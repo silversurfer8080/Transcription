@@ -183,6 +183,16 @@
     -fx-border-radius: 0 0 8px 8px;
 }
 
+/* Per-round collapsible panes nested inside a question — lighter than the outer panel
+   so the nesting reads clearly, with a compact title. */
+.round-pane > .title {
+    -fx-background-color: -app-surface;
+    -fx-padding: 3px 8px;
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+}
+.round-pane > *.content { -fx-padding: 6px; }
+
 /* ---- ScrollPane / SplitPane / Separator ---- */
 .scroll-pane { -fx-background-color: transparent; }
 .scroll-pane > .viewport { -fx-background-color: transparent; }
