@@ -83,21 +83,25 @@ public class InterviewApp extends Application {
     // ── Follow-up round UI state (FX-thread only) ──────────────────────────────
 
     /**
-     * One confirmed follow-up round inside a QuestionPanel. Its three text areas live
-     * in the three columns (below the initial Q/E/A, divided by a separator line):
-     * the read-only question in QUESTION, the AI-generated guide in EXPECTED ANSWER,
-     * and the candidate's spoken answer in CANDIDATE ANSWER.
+     * One confirmed follow-up round inside a QuestionPanel. It is its own collapsible
+     * {@link TitledPane} ({@code pane}) holding a three-column layout: the read-only
+     * question in QUESTION, the AI-generated guide in EXPECTED ANSWER, and the candidate's
+     * spoken answer in CANDIDATE ANSWER. Confirming a new round collapses the previous ones
+     * so only the current round stays open.
      */
     private static final class FollowUpRound {
-        final String   question;
-        final TextArea questionView;   // read-only, QUESTION column
-        final TextArea expectedArea;   // AI-generated reference points (editable), EXPECTED column
-        final TextArea answerArea;     // candidate's follow-up answer (live sink), CANDIDATE column
-        FollowUpRound(String question, TextArea questionView, TextArea expectedArea, TextArea answerArea) {
+        final String    question;
+        final TextArea  questionView;   // read-only, QUESTION column
+        final TextArea  expectedArea;   // AI-generated reference points (editable), EXPECTED column
+        final TextArea  answerArea;     // candidate's follow-up answer (live sink), CANDIDATE column
+        final TitledPane pane;          // the collapsible round container
+        FollowUpRound(String question, TextArea questionView, TextArea expectedArea,
+                      TextArea answerArea, TitledPane pane) {
             this.question     = question;
             this.questionView = questionView;
             this.expectedArea = expectedArea;
             this.answerArea   = answerArea;
+            this.pane         = pane;
         }
     }
 
@@ -1316,11 +1320,10 @@ public class InterviewApp extends Application {
         private Button   stopBtn;
         private Button   continueBtn;
 
-        // Per-column section stacks: the initial area, then a divided section per
-        // confirmed follow-up round (addRound appends to all three).
-        private VBox questionStack;
-        private VBox expectedStack;
-        private VBox answerStack;
+        // Each round (initial + each follow-up) is a collapsible TitledPane stacked in
+        // roundsBox; a new round collapses the earlier ones so only the current is open.
+        private VBox roundsBox;
+        private TitledPane initialRoundPane;
 
         // Follow-up round state (FX thread only)
         private final List<FollowUpRound> rounds = new ArrayList<>();
@@ -1354,20 +1357,13 @@ public class InterviewApp extends Application {
             expectedArea.setPrefRowCount(8);
             questionArea.setPrefRowCount(8);
 
-            // Each column starts with the initial area; confirming a follow-up appends
-            // a divider + labelled section to all three (see addRound). Each column
-            // scrolls internally (see column()), so the columns row keeps a fixed,
-            // user-resizable height instead of growing the whole panel unboundedly.
-            questionStack = new VBox(6, questionArea);
-            expectedStack = new VBox(6, expectedArea);
-            answerStack   = new VBox(6, answerArea);
-
-            // SplitPane gives draggable dividers so the user can resize column widths.
-            SplitPane columns = new SplitPane(
-                    column("QUESTION",         questionStack),
-                    column("EXPECTED ANSWER",  expectedStack),
-                    column("CANDIDATE ANSWER", answerStack));
-            columns.setDividerPositions(0.34, 0.67);
+            // The initial Q/E/A is the first collapsible round. Each confirmed follow-up
+            // adds its own round pane (see addRound); collapsing earlier rounds keeps the
+            // panel compact instead of forcing a scroll through a tall stack.
+            initialRoundPane = roundPane("Pergunta inicial",
+                    roundColumns(questionArea, expectedArea, answerArea));
+            initialRoundPane.setExpanded(true);
+            roundsBox = new VBox(6, initialRoundPane);
 
             partialLabel = new Label();
             partialLabel.getStyleClass().add("partial-label");
@@ -1472,11 +1468,10 @@ public class InterviewApp extends Application {
             currentSink = answerArea;
 
             // ── Content layout (Order invariant) ─────────────────────────────
-            // 1. columns (resizable — drag the handle to trade height with the analysis)
-            // 2. live preview  3. buttons/rating  4. analysis (resizable)
-            // 5. follow-up radios (resizable)
+            // 1. rounds (each round is a collapsible pane) 2. live preview
+            // 3. buttons/rating  4. analysis (resizable)  5. follow-up radios (resizable)
             VBox content = new VBox(6,
-                    wrapResizableRow(columns, 260),
+                    roundsBox,
                     partialLabel,
                     buttons,
                     new Separator(),
@@ -1492,22 +1487,38 @@ public class InterviewApp extends Application {
             titledPane.setAnimated(true);
         }
 
-        // Builds one SplitPane column: a section label above a vertical stack of
-        // sections (initial area + one per follow-up). A small min width lets dividers
-        // be dragged narrow without letting a column collapse to nothing.
-        private VBox column(String labelText, VBox stack) {
-            // Each column scrolls internally so the whole columns row can be dragged
-            // shorter than its content (e.g. after several follow-up rounds) via the
-            // resize handle below it, without the SplitPane clipping the lower rounds.
-            ScrollPane scroll = new ScrollPane(stack);
-            scroll.setFitToWidth(true);
-            scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-            scroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
-            scroll.getStyleClass().add("flat-scroll");
-            VBox.setVgrow(scroll, Priority.ALWAYS);
-            VBox col = new VBox(4, sectionLabel(labelText), scroll);
+        // Builds one round: a collapsible TitledPane wrapping a 3-column SplitPane
+        // (QUESTION / EXPECTED ANSWER / CANDIDATE ANSWER) for that round's areas.
+        private TitledPane roundPane(String title, Node content) {
+            TitledPane tp = new TitledPane(title, content);
+            tp.setAnimated(true);
+            tp.getStyleClass().add("round-pane");
+            return tp;
+        }
+
+        private SplitPane roundColumns(TextArea questionNode, TextArea expectedNode, TextArea answerNode) {
+            // SplitPane keeps the draggable column-width dividers per round.
+            SplitPane sp = new SplitPane(
+                    column("QUESTION",         questionNode),
+                    column("EXPECTED ANSWER",  expectedNode),
+                    column("CANDIDATE ANSWER", answerNode));
+            sp.setDividerPositions(0.34, 0.67);
+            return sp;
+        }
+
+        // One column: a section label above its (single) text area, which fills the height.
+        private VBox column(String labelText, TextArea area) {
+            VBox col = new VBox(4, sectionLabel(labelText), area);
+            VBox.setVgrow(area, Priority.ALWAYS);
             col.setMinWidth(60);
             return col;
+        }
+
+        // Collapses every round (initial + confirmed follow-ups) so a newly added one
+        // can be the only pane left open.
+        private void collapseAllRounds() {
+            if (initialRoundPane != null) initialRoundPane.setExpanded(false);
+            for (FollowUpRound r : rounds) r.pane.setExpanded(false);
         }
 
         // A compact section area for a follow-up row (read-only question view, or an
@@ -1640,10 +1651,11 @@ public class InterviewApp extends Application {
         }
 
         /**
-         * Appends a follow-up round across the three columns — a read-only question view
-         * (QUESTION), an editable AI-guide area (EXPECTED ANSWER) and the candidate's
-         * follow-up answer area (CANDIDATE ANSWER) — each preceded by a divider line.
-         * Makes the new answer area the live transcription sink.
+         * Adds a follow-up round as its own collapsible {@link TitledPane} with a 3-column
+         * layout — a read-only question view (QUESTION), an editable AI-guide area
+         * (EXPECTED ANSWER) and the candidate's follow-up answer area (CANDIDATE ANSWER).
+         * Collapses the earlier rounds so only this one stays open, and makes the new answer
+         * area the live transcription sink.
          *
          * @param question     the chosen follow-up question (fixed)
          * @param expectedText initial expected-guide text (null → empty; filled later live)
@@ -1661,21 +1673,19 @@ public class InterviewApp extends Application {
 
             TextArea qView = followUpArea(false, "");
             qView.setText(question);
-            questionStack.getChildren().addAll(
-                    new Separator(), sectionLabel("FOLLOW-UP " + n), qView);
-
             TextArea eArea = followUpArea(true, "Gabarito do follow-up (gerado pela IA)…");
             if (expectedText != null) eArea.setText(expectedText);
-            expectedStack.getChildren().addAll(
-                    new Separator(), sectionLabel("FOLLOW-UP " + n + " — GABARITO"), eArea);
-
             TextArea aArea = followUpArea(true, "Resposta do candidato ao follow-up…");
             aArea.setEditable(editable);
             if (answerText != null) aArea.setText(answerText);
-            answerStack.getChildren().addAll(
-                    new Separator(), sectionLabel("FOLLOW-UP " + n), aArea);
 
-            FollowUpRound r = new FollowUpRound(question, qView, eArea, aArea);
+            TitledPane pane = roundPane("FOLLOW-UP " + n, roundColumns(qView, eArea, aArea));
+
+            collapseAllRounds();          // fold the initial Q&A + earlier follow-ups
+            pane.setExpanded(true);       // keep only the new round open
+            roundsBox.getChildren().add(pane);
+
+            FollowUpRound r = new FollowUpRound(question, qView, eArea, aArea, pane);
             rounds.add(r);
             currentSink = aArea;   // Sink invariant: newest round is the live target
             return r;
