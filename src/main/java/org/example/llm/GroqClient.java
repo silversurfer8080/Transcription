@@ -4,21 +4,35 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.example.usage.ApiKind;
+import org.example.usage.RateLimit;
+import org.example.usage.UsageEvent;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
+import java.util.function.Consumer;
 
 public class GroqClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    // Optional, app-wide: notified with a UsageEvent for every LLM call (tokens used +
+    // remaining quota from the rate-limit headers). Set once by the UI. Static because the
+    // evaluation entry points are static and there is a single window.
+    private static volatile Consumer<UsageEvent> usageListener;
+
     /** One confirmed follow-up turn: the follow-up question and the candidate's spoken answer. */
     public record FollowUpTurn(String question, String answer) {}
 
     private GroqClient() {}
+
+    /** Registers a listener notified with a {@link UsageEvent} after every LLM call. */
+    public static void setUsageListener(Consumer<UsageEvent> listener) {
+        usageListener = listener;
+    }
 
     public static String evaluateAnswer(LlmProvider provider, String apiKey, String question,
                                         String expectedAnswer, String candidateAnswer,
@@ -82,12 +96,27 @@ public class GroqClient {
 
         try (HttpClient client = HttpClient.newHttpClient()) {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            reportUsage(provider, response);
             if (response.statusCode() != 200) {
                 throw new RuntimeException(buildErrorMessage(response.statusCode(), response.body()));
             }
             JsonNode root = MAPPER.readTree(response.body());
             return root.path("choices").get(0).path("message").path("content").asText();
         }
+    }
+
+    // Reports one LLM call's usage: +1 request, total_tokens (all providers return `usage`),
+    // and the remaining quota from the rate-limit headers (Groq/Cerebras send them; Gemini's
+    // compat layer does not, yielding an empty RateLimit). Defensive — never throws.
+    private static void reportUsage(LlmProvider provider, HttpResponse<String> response) {
+        Consumer<UsageEvent> listener = usageListener;
+        if (listener == null) return;
+        double tokens = 0;
+        try {
+            tokens = MAPPER.readTree(response.body()).path("usage").path("total_tokens").asDouble(0);
+        } catch (Exception ignored) { /* error body may not be JSON */ }
+        RateLimit rl = RateLimit.parse(response.headers(), ApiKind.LLM);
+        listener.accept(new UsageEvent(provider.shortName(), ApiKind.LLM, 1, tokens, rl));
     }
 
     static String buildErrorMessage(int status, String body) {

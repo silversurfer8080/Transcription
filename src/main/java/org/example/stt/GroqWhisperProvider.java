@@ -1,6 +1,9 @@
 package org.example.stt;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.usage.ApiKind;
+import org.example.usage.RateLimit;
+import org.example.usage.UsageEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,12 +45,14 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
     private static final String API_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
     private static final String DEFAULT_MODEL = "whisper-large-v3-turbo";
     private static final long DEFAULT_FLUSH_MS = 5_000;
+    // Canonical capture format is 16 kHz mono 16-bit → 32000 bytes per audio-second.
+    private static final int BYTES_PER_SECOND = 16_000 * 2;
 
     private final String apiKey;
     private final String model;
     private final String language;   // ISO code (e.g. "en"); null/blank → Whisper auto-detects
     private HttpClient httpClient;
-    private volatile Consumer<GroqRateLimit> rateLimitListener;   // optional; fired per response
+    private volatile Consumer<UsageEvent> usageListener;   // optional; fired per response
 
     public GroqWhisperProvider(String apiKey, String channelId) {
         this(apiKey, channelId, "en", DEFAULT_MODEL, DEFAULT_FLUSH_MS);
@@ -67,11 +72,12 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
     }
 
     /**
-     * Registers a listener notified with the remaining quota parsed from each Groq response
-     * (both success and 429). Fired on the flush thread — marshal to the UI thread yourself.
+     * Registers a listener notified with a {@link UsageEvent} for each Groq response (success
+     * and 429): requests +1, the clip's audio-seconds, and the remaining quota from the
+     * rate-limit headers. Fired on the flush thread — marshal to the UI thread yourself.
      */
-    public void setRateLimitListener(Consumer<GroqRateLimit> listener) {
-        this.rateLimitListener = listener;
+    public void setUsageListener(Consumer<UsageEvent> listener) {
+        this.usageListener = listener;
     }
 
     @Override protected String providerName() { return "Groq Whisper provider"; }
@@ -94,11 +100,13 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        // Surface remaining quota from the rate-limit headers (present on 200 and 429).
-        Consumer<GroqRateLimit> listener = rateLimitListener;
+        // Report usage: +1 request, the clip's audio-seconds, and remaining quota from the
+        // rate-limit headers (present on 200 and 429).
+        Consumer<UsageEvent> listener = usageListener;
         if (listener != null) {
-            GroqRateLimit quota = GroqRateLimit.parse(response.headers());
-            if (quota.hasData()) listener.accept(quota);
+            double audioSeconds = pcm.length / (double) BYTES_PER_SECOND;
+            RateLimit rl = RateLimit.parse(response.headers(), ApiKind.STT);
+            listener.accept(new UsageEvent("Groq", ApiKind.STT, 1, audioSeconds, rl));
         }
 
         if (response.statusCode() == 200) {
