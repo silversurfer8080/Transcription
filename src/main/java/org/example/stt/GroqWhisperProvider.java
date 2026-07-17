@@ -51,6 +51,11 @@ public class GroqWhisperProvider extends BatchWindowSttProvider {
         this(apiKey, channelId, "en", DEFAULT_MODEL, DEFAULT_FLUSH_MS);
     }
 
+    /** The given Whisper model, English, and the default window. */
+    public GroqWhisperProvider(String apiKey, String channelId, String model) {
+        this(apiKey, channelId, "en", model, DEFAULT_FLUSH_MS);
+    }
+
     public GroqWhisperProvider(String apiKey, String channelId,
                                String language, String model, long flushMillis) {
         super(channelId, flushMillis);
