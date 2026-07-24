@@ -154,7 +154,9 @@ public class GeminiSttProvider extends BatchWindowSttProvider {
             detail = MAPPER.readTree(body).path("error").path("message").asText("");
         } catch (Exception ignored) { /* body may not be JSON */ }
         String base = switch (status) {
-            case 400      -> "Gemini: requisição inválida (400)";
+            // Google returns 400 (not 401) for an invalid/expired key or a project without
+            // the Generative Language API enabled — so a 400 here is usually a key problem.
+            case 400      -> "Gemini 400 — geralmente chave inválida/expirada ou API não habilitada; verifique a chave";
             case 401, 403 -> "Chave Gemini inválida (" + status + ")";
             case 429      -> "Gemini: limite de uso atingido (429)";
             default       -> "Gemini HTTP " + status;
