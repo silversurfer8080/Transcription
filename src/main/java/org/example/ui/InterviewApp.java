@@ -1287,6 +1287,11 @@ public class InterviewApp extends Application {
         if (msg == null) return "Erro desconhecido";
         if (msg.contains("HTTP_401")) return "API key inválida ou expirada. Verifique a chave do provedor selecionado.";
         if (msg.contains("HTTP_403")) return "Acesso negado (403). Verifique as permissões da API key.";
+        // Gemini (e outros) devolvem 400 para chave inválida/expirada ou API não habilitada —
+        // um 400 aqui é quase sempre problema de chave/modelo, não da requisição em si.
+        if (msg.contains("HTTP_400")) return "Requisição rejeitada (400). Causa comum: chave "
+                + "inválida/expirada ou API não habilitada no provedor selecionado em \"Análise\" — "
+                + "verifique a chave. (" + msg + ")";
         if (msg.contains("HTTP_429")) return "Limite de requisições atingido. Troque de provedor ou aguarde alguns segundos.";
         if (msg.contains("HTTP_5"))   return "Erro interno do servidor do modelo. Tente novamente em instantes.";
         return msg;
