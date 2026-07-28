@@ -1336,6 +1336,10 @@ public class InterviewApp extends Application {
         private Button   stopBtn;
         private Button   continueBtn;
 
+        // Last AnalysisResult.stars() string, "" when unrated (FX-thread only).
+        // Mirrored into the TitledPane header by updateTitle().
+        private String ratingStars = "";
+
         // Each round (initial + each follow-up) is a collapsible TitledPane stacked in
         // roundsBox; a new round collapses the earlier ones so only the current is open.
         private VBox roundsBox;
@@ -1495,7 +1499,7 @@ public class InterviewApp extends Application {
                     followUpSelectBox);
             content.setPadding(new Insets(10));
 
-            titledPane = new TitledPane("Question " + number, content);
+            titledPane = new TitledPane(QuestionHeader.format(number, "", ""), content);
             FontIcon activeIcon = icon("mdi2r-record-circle");
             activeIcon.setIconColor(Color.web("#DC2626"));
             titledPane.setGraphic(activeIcon);
@@ -1794,10 +1798,7 @@ public class InterviewApp extends Application {
         // ── Helpers ─────────────────────────────────────────────────────
 
         private void updateTitle() {
-            String q = questionArea.getText().trim();
-            String preview = q.isEmpty() ? "" :
-                    ": \"" + (q.length() > 55 ? q.substring(0, 55) + "…" : q) + "\"";
-            titledPane.setText("Question " + number + preview);
+            titledPane.setText(QuestionHeader.format(number, questionArea.getText(), ratingStars));
             FontIcon statusIcon;
             if (active.get()) {
                 statusIcon = icon("mdi2r-record-circle");
@@ -1839,6 +1840,8 @@ public class InterviewApp extends Application {
             analyzeBtn.setText("Analisando…");
             analysisArea.setText("");
             ratingLabel.setText("");
+            ratingStars = "";
+            updateTitle();
             showFollowUpOptions(List.of());   // clear any unconsumed previous set
 
             Thread.ofVirtual().name("answer-evaluate-q" + number).start(() -> {
@@ -1849,6 +1852,8 @@ public class InterviewApp extends Application {
                     Platform.runLater(() -> {
                         analysisArea.setText(analysis.prose());
                         ratingLabel.setText(analysis.stars());
+                        ratingStars = analysis.stars();
+                        updateTitle();
                         showFollowUpOptions(analysis.followUps());
                         resetAnalyzeBtn();
                     });
