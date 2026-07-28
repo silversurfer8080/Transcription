@@ -7,10 +7,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class LlmProviderTest {
 
     @Test
-    void everyProvider_hasHttpsEndpointAndModel() {
+    void everyProvider_hasSecureOrLoopbackEndpointAndModel() {
         for (LlmProvider p : LlmProvider.values()) {
-            assertTrue(p.endpoint().startsWith("https://"),
-                    p + " must use an HTTPS endpoint");
+            boolean secure   = p.endpoint().startsWith("https://");
+            boolean loopback = p.endpoint().startsWith("http://localhost")
+                    || p.endpoint().startsWith("http://127.0.0.1");
+            assertTrue(secure || loopback,
+                    p + " must use HTTPS, or plain HTTP only for a local loopback endpoint");
             assertFalse(p.defaultModel().isBlank(),
                     p + " must declare a default model");
             assertFalse(p.label().isBlank(), p + " must have a display label");
@@ -37,6 +40,17 @@ class LlmProviderTest {
         assertTrue(LlmProvider.GROQ.endpoint().contains("api.groq.com"));
         assertTrue(LlmProvider.GEMINI.endpoint().contains("generativelanguage.googleapis.com"));
         assertTrue(LlmProvider.CEREBRAS.endpoint().contains("api.cerebras.ai"));
+        assertTrue(LlmProvider.LOCAL.endpoint().contains("localhost:11434"));
+    }
+
+    @Test
+    void localProvider_isLoopbackHttpAndNonThinking() {
+        // Ollama on loopback: plain HTTP is intentional (never leaves the machine), and
+        // qwen2.5:7b-instruct is a plain instruct model, so reasoning_effort is omitted.
+        assertTrue(LlmProvider.LOCAL.endpoint().startsWith("http://localhost"),
+                "Local provider must target the Ollama loopback endpoint");
+        assertNull(LlmProvider.LOCAL.reasoningEffort(),
+                "The local instruct model is not a thinking model — reasoning_effort must be omitted");
     }
 
     @Test

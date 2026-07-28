@@ -3,14 +3,14 @@ package org.example.llm;
 /**
  * OpenAI-compatible chat-completions backends the evaluation can run against.
  *
- * <p>Groq, Google Gemini (via its OpenAI-compatibility layer) and Cerebras all
- * speak the same wire format: a {@code {model, messages}} request whose answer is
- * read from {@code choices[0].message.content}. Because of that, {@link GroqClient#call}
- * works unchanged across all three — only the {@link #endpoint()}, {@link #defaultModel()}
+ * <p>Groq, Google Gemini (via its OpenAI-compatibility layer), Cerebras and a local
+ * Ollama server all speak the same wire format: a {@code {model, messages}} request whose
+ * answer is read from {@code choices[0].message.content}. Because of that, {@link GroqClient#call}
+ * works unchanged across all of them — only the {@link #endpoint()}, {@link #defaultModel()}
  * and the API key differ. Adding another OpenAI-compatible provider is a one-line
  * addition here.
  *
- * <p>Why these three, given the free tiers (mid-2026):
+ * <p>Why these, given the free tiers (mid-2026):
  * <ul>
  *   <li><b>Gemini 2.5 Flash</b> — ~1,500 requests/day free, the most generous tier and
  *       an API key independent from Groq's shared STT+LLM budget.</li>
@@ -19,6 +19,9 @@ package org.example.llm;
  *       own recommended migration target.)</li>
  *   <li><b>Groq</b> — the original backend; fast, but its free budget is shared with
  *       Groq Whisper STT, which is what tends to exhaust it.</li>
+ *   <li><b>Local (Ollama)</b> — a model served on loopback: free, offline, key-less and
+ *       never rate-limited. Quality and latency depend on the local hardware, so it is
+ *       opt-in rather than the default.</li>
  * </ul>
  *
  * <h3>The "thinking" gotcha</h3>
@@ -42,7 +45,20 @@ public enum LlmProvider {
 
     CEREBRAS("Cerebras", "Cerebras — GPT-OSS 120B",
             "https://api.cerebras.ai/v1/chat/completions",
-            "gpt-oss-120b", "low", 2500);
+            "gpt-oss-120b", "low", 2500),
+
+    /**
+     * A local model served by Ollama's OpenAI-compatible endpoint on loopback — free,
+     * offline and key-less ({@code InterviewApp.llmKeyFor} supplies a dummy, since Ollama
+     * requires the {@code Authorization} header but ignores its value). Uses {@code http://}
+     * deliberately: the request never leaves the machine. {@code qwen2.5:7b-instruct} is a
+     * plain instruct model (no "thinking"), so {@code reasoning_effort} is omitted; the
+     * ~4.5&nbsp;GB Q4 weights fit the 6&nbsp;GB VRAM class the tool targets. Change the model
+     * id to any tag pulled with {@code ollama pull}.
+     */
+    LOCAL("Local", "Local — Ollama (Qwen2.5 7B)",
+            "http://localhost:11434/v1/chat/completions",
+            "qwen2.5:7b-instruct", null, 2500);
 
     private final String shortName;
     private final String label;

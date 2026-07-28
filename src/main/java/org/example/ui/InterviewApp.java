@@ -787,6 +787,9 @@ public class InterviewApp extends Application {
             case GROQ     -> groqKeyField.getText().trim();
             case GEMINI   -> geminiKeyField.getText().trim();
             case CEREBRAS -> cerebrasKeyField.getText().trim();
+            // Ollama needs the Authorization header present but ignores its value; a fixed
+            // non-blank dummy also clears the "key required" guards, so LOCAL needs no key field.
+            case LOCAL    -> "ollama";
         };
     }
 
@@ -1285,6 +1288,14 @@ public class InterviewApp extends Application {
     // Translates Groq HTTP error codes into actionable Portuguese messages.
     private static String translateLlmError(String msg) {
         if (msg == null) return "Erro desconhecido";
+        // No HTTP status at all → the request never reached a server. For the "Local (Ollama)"
+        // provider this almost always means the Ollama app/server isn't running (or the model
+        // wasn't pulled); for a remote provider it points at connectivity.
+        if (msg.contains("Connection refused") || msg.contains("ConnectException")
+                || msg.contains("Connection timed out"))
+            return "Não foi possível conectar ao provedor de análise. Se estiver usando "
+                    + "\"Local — Ollama\", confirme que o Ollama está aberto (porta 11434) e que "
+                    + "o modelo foi baixado (ollama pull). (" + msg + ")";
         if (msg.contains("HTTP_401")) return "API key inválida ou expirada. Verifique a chave do provedor selecionado.";
         if (msg.contains("HTTP_403")) return "Acesso negado (403). Verifique as permissões da API key.";
         // Gemini (e outros) devolvem 400 para chave inválida/expirada ou API não habilitada —
