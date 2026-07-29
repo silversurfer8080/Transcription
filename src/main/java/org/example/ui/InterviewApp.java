@@ -133,11 +133,9 @@ public class InterviewApp extends Application {
     private HBox voskModelRow;               // shown only when Vosk is the STT engine
     private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
     private HBox groqModelRow;               // shown only when Groq is the STT engine
-    // Live Groq quota gauge (fed by GroqWhisperProvider's rate-limit headers)
+    // Live Groq quota gauge (requests/day remaining, fed by GroqWhisperProvider's rate-limit headers)
     private ProgressBar groqReqBar;
-    private ProgressBar groqAudBar;
     private Label groqReqValue;
-    private Label groqAudValue;
     // Cross-API usage tracking (STT + LLM), shown live and in the Métricas tab
     private final UsageTracker usageTracker = new UsageTracker();
     private ProgressBar llmReqBar;   // live indicator for the active analysis provider
@@ -435,21 +433,18 @@ public class InterviewApp extends Application {
 
     // ── Groq quota gauge ──────────────────────────────────────────────────
 
-    /** Two thin bars (requests/day, audio-seconds/hour) with the remaining/limit numbers. */
+    /** One thin bar (requests/day remaining) with the remaining/limit numbers. The Groq
+     *  transcription endpoint doesn't send an audio-seconds rate-limit header, so the old
+     *  "áudio/h" bar never populated and was removed; audio-seconds still show in Métricas. */
     private Node buildGroqQuotaGauge() {
         groqReqValue = new Label("—");
-        groqAudValue = new Label("—");
         groqReqBar = quotaBar();
-        groqAudBar = quotaBar();
-        VBox box = new VBox(3,
-                quotaRow("req/dia", groqReqBar, groqReqValue),
-                quotaRow("áudio/h", groqAudBar, groqAudValue));
-        box.setAlignment(Pos.CENTER_LEFT);
-        box.setMaxWidth(Double.MAX_VALUE);   // stretch across the spare row width
-        Tooltip.install(box, new Tooltip(
-                "Cota gratuita do Groq restante (lida dos cabeçalhos da resposta).\n"
+        HBox row = quotaRow("req/dia", groqReqBar, groqReqValue);
+        row.setMaxWidth(Double.MAX_VALUE);   // stretch across the spare row width
+        Tooltip.install(row, new Tooltip(
+                "Cota gratuita do Groq restante (req/dia, lida dos cabeçalhos da resposta).\n"
                 + "Verde = folgado, vermelho = quase no limite. Zera → HTTP 429."));
-        return box;
+        return row;
     }
 
     private ProgressBar quotaBar() {
@@ -482,20 +477,13 @@ public class InterviewApp extends Application {
                 () -> "-fx-font-size: " + fontSize.get() + "px;", fontSize));
     }
 
-    /** Updates the live Groq STT gauge from a rate-limit reading (called on the FX thread). */
+    /** Updates the live Groq STT gauge (req/dia) from a rate-limit reading (FX thread). */
     private void updateGroqQuota(RateLimit rl) {
         if (rl.hasRequests()) {
             double f = rl.requestsFraction();
             groqReqBar.setProgress(f);
             groqReqBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
             groqReqValue.setText(fmtQuota(rl.remainingRequests()) + "/" + fmtQuota(rl.limitRequests()));
-        }
-        if (rl.hasSecondary()) {
-            double f = rl.secondaryFraction();
-            groqAudBar.setProgress(f);
-            groqAudBar.setStyle("-fx-accent: " + quotaColor(f) + ";");
-            groqAudValue.setText(fmtQuota(rl.remainingSecondary()) + "/"
-                    + fmtQuota(rl.limitSecondary()) + "s");
         }
     }
 
