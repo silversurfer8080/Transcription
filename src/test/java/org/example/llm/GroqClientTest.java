@@ -211,6 +211,20 @@ class GroqClientTest {
                 "RATING instruction must come after the follow-up block instruction");
     }
 
+    @Test
+    void buildEvaluationPrompt_doesNotContainAtLeastOneConstraint() {
+        // buildEvaluationPrompt is the legacy single-Q&A path declared OUT OF SCOPE in spec §10
+        // and AC4: it must remain byte-identical to before this change. The "At least one
+        // follow-up must reference the candidate's most recent answer" sentence belongs
+        // exclusively to buildExchangePrompt. This guard ensures a future edit does not
+        // accidentally copy the exchange-only constraint into the wrong method.
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "", "A", "", null, 5, "");
+        assertFalse(prompt.contains("At least one"),
+                "buildEvaluationPrompt must NOT contain the exchange-specific 'At least one' constraint (spec §10)");
+        assertFalse(prompt.contains("most recent answer"),
+                "buildEvaluationPrompt must NOT reference 'most recent answer' — that concept belongs to buildExchangePrompt only (spec §10)");
+    }
+
     // ── Shared preamble helpers (maxStars, whoLine, jobSection, expectedSection, scaleGuide) ──
 
     @Test
@@ -409,6 +423,33 @@ class GroqClientTest {
         String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
         assertTrue(prompt.contains("exactly 3"),
                 "Exchange prompt must request exactly 3 follow-up questions (matching the 3 radios)");
+    }
+
+    @Test
+    void buildExchangePrompt_requiresAtLeastOneFollowUpTiedToCandidateAnswer() {
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        assertTrue(prompt.contains("At least one"),
+                "Exchange prompt must require at least one follow-up to build on the candidate's answer");
+        assertTrue(prompt.contains("most recent answer"),
+                "The instruction must anchor a follow-up to the candidate's most recent answer");
+        // The new constraint must not disturb the exactly-3 count or the tail contract.
+        assertTrue(prompt.contains("exactly 3"),
+                "Prompt must still request exactly 3 follow-up questions");
+        assertTrue(prompt.lastIndexOf("RATING: n/") > prompt.indexOf("FOLLOW-UP QUESTIONS:"),
+                "RATING line must still come after the FOLLOW-UP QUESTIONS: section");
+    }
+
+    @Test
+    void buildExchangePrompt_atLeastOneInstruction_joinsCleanlyWithPrecedingSentence() {
+        // Spec §9 explicitly flags a risk: a missing trailing space in the Java text-block
+        // line continuation (" \") would join "role." and "At least one" without a space.
+        // Assert the exact bridging phrase so a future indentation/continuation edit that
+        // drops the trailing space is caught immediately rather than silently sending a
+        // malformed prompt.
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        assertTrue(prompt.contains("role. At least one"),
+                "The new instruction must join the preceding 'role.' sentence with exactly one space — "
+                + "a missing trailing space in the text-block continuation would concatenate words without a separator");
     }
 
     @Test

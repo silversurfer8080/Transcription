@@ -287,6 +287,12 @@ public class GroqClient {
                 prose assessment, provide exactly 3 follow-up questions the interviewer could \
                 ask to probe the candidate more deeply in the next round, targeting the latest \
                 gaps, vague spots, or claims worth pressing on, kept relevant to the role. \
+                At least one of these three follow-ups must directly build on and explicitly \
+                reference a specific point the candidate actually made in their most recent \
+                answer (their initial answer, or the latest follow-up answer when follow-up \
+                rounds are present): quote or paraphrase that concrete detail, claim, example, \
+                number, or term so the question clearly follows from what they just said, rather \
+                than being a generic probe. \
                 Output them in a dedicated section starting with a line containing exactly \
                 FOLLOW-UP QUESTIONS: followed by each follow-up question on its own line \
                 prefixed with "- ". That header line must be exactly FOLLOW-UP QUESTIONS: on \
