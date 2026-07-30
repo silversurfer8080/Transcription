@@ -86,7 +86,8 @@ class IkonliFontIconTest {
         "mdi2c-comment-question-outline",
         "mdi2c-content-copy",
         "mdi2r-record-circle",
-        "mdi2c-check-circle"
+        "mdi2c-check-circle",
+        "mdi2f-file-account-outline"
     })
     void iconLiteral_matchesMdi2NamingPattern(String literal) {
         // Pattern: mdi2 + one lowercase letter (category initial) + '-' + kebab name
@@ -118,7 +119,8 @@ class IkonliFontIconTest {
         "mdi2c-comment-question-outline",
         "mdi2c-content-copy",
         "mdi2r-record-circle",
-        "mdi2c-check-circle"
+        "mdi2c-check-circle",
+        "mdi2f-file-account-outline"
     })
     void fontIcon_validLiteral_createsWithoutException(String literal) throws InterruptedException {
         assumeTrue(javaFxAvailable, "JavaFX toolkit unavailable — skipping FontIcon instantiation test");

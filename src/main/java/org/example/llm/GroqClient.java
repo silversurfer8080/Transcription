@@ -53,10 +53,10 @@ public class GroqClient {
     public static String evaluateExchange(LlmProvider provider, String apiKey,
             String question, String expectedAnswer, String candidateAnswer,
             List<FollowUpTurn> followUps, String candidateName,
-            String gender, int starScale, String jobDescription) throws Exception {
+            String gender, int starScale, String jobDescription, String candidateCv) throws Exception {
         return call(provider, apiKey, buildExchangePrompt(
                 question, expectedAnswer, candidateAnswer, followUps,
-                candidateName, gender, starScale, jobDescription));
+                candidateName, gender, starScale, jobDescription, candidateCv));
     }
 
     /**
@@ -67,9 +67,9 @@ public class GroqClient {
      */
     public static String generateFollowUpExpected(LlmProvider provider, String apiKey,
             String jobDescription, String initialQuestion, String candidateInitialAnswer,
-            String followUpQuestion) throws Exception {
+            String followUpQuestion, String candidateCv) throws Exception {
         return call(provider, apiKey, buildFollowUpExpectedPrompt(
-                jobDescription, initialQuestion, candidateInitialAnswer, followUpQuestion));
+                jobDescription, initialQuestion, candidateInitialAnswer, followUpQuestion, candidateCv));
     }
 
     private static String call(LlmProvider provider, String apiKey, String userPrompt) throws Exception {
@@ -158,6 +158,17 @@ public class GroqClient {
                   + jobDescription.trim();
     }
 
+    /** Builds the candidate-CV section, or the "none provided" fallback. */
+    static String cvSection(String cv) {
+        return (cv == null || cv.trim().isEmpty())
+                ? "No CV was provided for the candidate; rely on the job description and the"
+                  + " candidate's spoken answers alone."
+                : "Candidate's CV / resume, provided as background context (use it to inform"
+                  + " follow-ups where relevant, but verify any claim against what the candidate"
+                  + " actually says):\n"
+                  + cv.trim();
+    }
+
     /** Builds the expected-answer section, or the "no model answer" fallback. */
     static String expectedSection(String expectedAnswer) {
         String expected = (expectedAnswer == null) ? "" : expectedAnswer.trim();
@@ -242,13 +253,15 @@ public class GroqClient {
     static String buildExchangePrompt(String question, String expectedAnswer,
             String candidateAnswer, List<FollowUpTurn> followUps,
             String candidateName, String gender, int starScale,
-            String jobDescription) {
+            String jobDescription, String candidateCv) {
         int max = maxStars(starScale);
         List<FollowUpTurn> fus = (followUps == null) ? List.of() : followUps;
         String conversation = buildConversationBlock(question, candidateAnswer, fus);
         return """
                 You are an experienced technical interviewer assessing a candidate's \
                 performance across a multi-turn exchange.
+
+                %s
 
                 %s
 
@@ -293,6 +306,10 @@ public class GroqClient {
                 rounds are present): quote or paraphrase that concrete detail, claim, example, \
                 number, or term so the question clearly follows from what they just said, rather \
                 than being a generic probe. \
+                Where the candidate's CV is provided and relevant, you may ground one or more \
+                follow-ups in specific items from it (a role, project, technology, or claim on \
+                the CV) and how they relate to what this role requires, but only when it fits \
+                naturally. \
                 Output them in a dedicated section starting with a line containing exactly \
                 FOLLOW-UP QUESTIONS: followed by each follow-up question on its own line \
                 prefixed with "- ". That header line must be exactly FOLLOW-UP QUESTIONS: on \
@@ -301,8 +318,8 @@ public class GroqClient {
                 the whole exchange on its own very last line in exactly this format, with no \
                 extra words: RATING: n/%d
                 """.formatted(whoLine(candidateName, gender), jobSection(jobDescription),
-                        question, expectedSection(expectedAnswer), conversation,
-                        scaleGuide(max), max);
+                        cvSection(candidateCv), question, expectedSection(expectedAnswer),
+                        conversation, scaleGuide(max), max);
     }
 
     /**
@@ -311,7 +328,7 @@ public class GroqClient {
      * grounded in the role and the exchange so far. Package-private for testing.
      */
     static String buildFollowUpExpectedPrompt(String jobDescription, String initialQuestion,
-            String candidateInitialAnswer, String followUpQuestion) {
+            String candidateInitialAnswer, String followUpQuestion, String candidateCv) {
         String ia = (candidateInitialAnswer == null) ? "" : candidateInitialAnswer.trim();
         return """
                 You are assisting a technical interviewer. Based on the role and the exchange \
@@ -325,6 +342,8 @@ public class GroqClient {
 
                 %s
 
+                %s
+
                 Initial question asked:
                 %s
 
@@ -333,7 +352,7 @@ public class GroqClient {
 
                 Follow-up question to write the guide for:
                 %s
-                """.formatted(jobSection(jobDescription), initialQuestion,
+                """.formatted(jobSection(jobDescription), cvSection(candidateCv), initialQuestion,
                         ia.isEmpty() ? "(not captured)" : ia, followUpQuestion);
     }
 
