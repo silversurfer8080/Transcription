@@ -253,4 +253,85 @@ class AnalysisResultTest {
         assertTrue(r.followUps().isEmpty(), "a period-terminated mention is not a header");
         assertEquals(text, r.prose(), "prose must be left intact when there is no real header");
     }
+
+    // ── [[FU]] sentinel extraction (primary path; robust to header wording) ────
+
+    @Test
+    void followUps_sentinelLines_parsedWithHeader() {
+        String text = """
+                Solid overview, thin on trade-offs.
+
+                FOLLOW-UP QUESTIONS:
+                [[FU]] How would you size the pool?
+                [[FU]] What happens on task rejection?
+                [[FU]] How do you detect a leak?
+                RATING: 3/5""";
+        AnalysisResult r = AnalysisResult.parse(text, 5);
+        assertEquals(List.of(
+                "How would you size the pool?",
+                "What happens on task rejection?",
+                "How do you detect a leak?"), r.followUps());
+        assertFalse(r.prose().contains("[[FU]]"), "sentinel lines stripped from prose");
+        assertFalse(r.prose().contains("FOLLOW-UP"), "header stripped from prose");
+        assertEquals(3, r.score());
+    }
+
+    @Test
+    void followUps_sentinelLines_parsedEvenWithoutRecognizableHeader() {
+        // The core fix: the model reworded the header so neither the strict nor the loose
+        // header pattern matches, but the [[FU]] sentinel still tags each follow-up. They
+        // must become radios AND be stripped from the prose instead of leaking into it —
+        // the exact Llama/Cerebras symptom this change targets.
+        String text = """
+                The candidate was competent but vague on scaling.
+
+                A few things I would probe next round, off the top of my head
+                [[FU]] How would this scale to ten times the load?
+                [[FU]] What is the failure mode under a network partition?
+                [[FU]] Which metric would you watch first?
+                RATING: 4/5""";
+        AnalysisResult r = AnalysisResult.parse(text, 5);
+        assertEquals(3, r.followUps().size(), "sentinel lines parsed without a recognizable header");
+        assertEquals("How would this scale to ten times the load?", r.followUps().get(0));
+        assertFalse(r.prose().contains("[[FU]]"), "sentinel block stripped from prose");
+        assertFalse(r.prose().contains("How would this scale"),
+                "follow-ups must not leak into the analysis body");
+        assertTrue(r.prose().startsWith("The candidate was competent"));
+        assertEquals(4, r.score());
+    }
+
+    @Test
+    void followUps_sentinelStripsSurroundingMarkdownAndStrayBullets() {
+        String text = """
+                FOLLOW-UP QUESTIONS:
+                [[FU]] **What about thread safety?**
+                [[FU]] - And back-pressure?""";
+        assertEquals(List.of("What about thread safety?", "And back-pressure?"),
+                AnalysisResult.parse(text, 5).followUps());
+    }
+
+    @Test
+    void followUps_sentinelTakesPrecedenceOverDashBullets() {
+        // A defensive reply that includes BOTH old-style dash bullets and new [[FU]] lines:
+        // the sentinel path wins so the stale bullet is never counted.
+        String text = """
+                FOLLOW-UP QUESTIONS:
+                - stale dash bullet that should be ignored
+                [[FU]] Real sentinel one?
+                [[FU]] Real sentinel two?""";
+        assertEquals(List.of("Real sentinel one?", "Real sentinel two?"),
+                AnalysisResult.parse(text, 5).followUps());
+    }
+
+    @Test
+    void followUps_sentinel_ratingLineNotCaptured() {
+        String text = """
+                FOLLOW-UP QUESTIONS:
+                [[FU]] Only one?
+                RATING: 5/5""";
+        AnalysisResult r = AnalysisResult.parse(text, 5);
+        assertEquals(List.of("Only one?"), r.followUps());
+        assertEquals(5, r.score());
+        assertFalse(r.prose().contains("RATING"), "rating line stripped from prose");
+    }
 }

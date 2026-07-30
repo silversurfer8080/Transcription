@@ -9,13 +9,15 @@ import java.util.regex.Pattern;
  * The structured result of an LLM answer evaluation, parsed from the free-form text
  * that {@link GroqClient#evaluateExchange} returns.
  *
- * <p>The evaluation prompts (see {@code GroqClient}) instruct the model to end its
- * reply with a {@code FOLLOW-UP QUESTIONS:} section and a final {@code RATING: n/max}
- * line. This record makes that otherwise "stringly-typed" contract explicit: a single
- * {@link #parse} call turns the raw reply into {@code (prose, score, max, followUps)},
- * replacing the scattered strip/parse helpers the UI used to chain by hand.
+ * <p>The exchange prompt (see {@code GroqClient}) instructs the model to end its reply with
+ * a {@code FOLLOW-UP QUESTIONS:} section whose every follow-up line is prefixed by an
+ * {@code [[FU]]} sentinel, then a final {@code RATING: n/max} line. Extraction keys off the
+ * sentinel first — robust against models that reword or drop the header — and falls back to
+ * header detection for replies that omit it. This record makes that otherwise "stringly-typed"
+ * contract explicit: a single {@link #parse} call turns the raw reply into
+ * {@code (prose, score, max, followUps)}, replacing the strip/parse helpers the UI once chained.
  *
- * <p><b>Change the tail format of either prompt and you must change the patterns here</b>,
+ * <p><b>Change the tail format of the prompt and you must change the patterns here</b>,
  * or the star rating / follow-up radios silently break.
  *
  * @param prose     the analysis body, with the follow-up section and rating line removed
@@ -44,6 +46,14 @@ public record AnalysisResult(String prose, int score, int max, List<String> foll
     // truncates the analysis body. Tried only after the strict header fails.
     private static final Pattern FOLLOWUP_HEADER_LOOSE =
             Pattern.compile("(?im)^.*\\bFOLLOW-?\\s?UP\\s+QUESTIONS\\b[^\\n]*:[ \\t*_]*$");
+
+    // Per-line sentinel: the exchange prompt now prefixes every follow-up with [[FU]], so
+    // extraction/stripping key off this marker first and no longer depend on recognizing a
+    // free-text header the models reword or drop (Llama/Cerebras sometimes did, leaking the
+    // block into the prose). A small leading run of whitespace/markdown before the token is
+    // tolerated. The header patterns above remain a fallback for replies without the sentinel.
+    private static final Pattern FOLLOWUP_LINE =
+            Pattern.compile("(?im)^[\\s>*_-]*\\[\\[FU\\]\\]\\s*(.+?)\\s*$");
 
     /**
      * Parses a raw model reply into an {@link AnalysisResult}.
@@ -88,6 +98,25 @@ public record AnalysisResult(String prose, int score, int max, List<String> foll
     }
 
     static List<String> parseFollowUps(String text) {
+        // Primary: sentinel-tagged lines, independent of any header wording. Falls back to
+        // the legacy header-delimited section only when no [[FU]] lines are present.
+        List<String> tagged = parseSentinelFollowUps(text);
+        return tagged.isEmpty() ? parseHeaderFollowUps(text) : tagged;
+    }
+
+    // Every line carrying the [[FU]] sentinel the exchange prompt mandates, in order.
+    private static List<String> parseSentinelFollowUps(String text) {
+        List<String> result = new ArrayList<>();
+        Matcher m = FOLLOWUP_LINE.matcher(text);
+        while (m.find()) {
+            String q = cleanFollowUp(m.group(1));
+            if (!q.isEmpty() && !q.toLowerCase().startsWith("rating:")) result.add(q);
+        }
+        return result;
+    }
+
+    // Legacy fallback: dash/number bullets under a recognized FOLLOW-UP QUESTIONS header.
+    private static List<String> parseHeaderFollowUps(String text) {
         int[] header = findFollowUpHeader(text);
         if (header == null) return List.of();
         String after = text.substring(header[1]);
@@ -96,19 +125,29 @@ public record AnalysisResult(String prose, int score, int max, List<String> foll
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
             if (trimmed.toLowerCase().startsWith("rating:")) break;
-            String stripped = trimmed
-                    .replaceFirst("^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "")  // bullet / number prefix
-                    .replaceAll("^\\*+|\\*+$", "")                          // surrounding **markdown**
-                    .trim();
+            String stripped = cleanFollowUp(trimmed);
             if (!stripped.isEmpty()) result.add(stripped);
         }
         return result;
     }
 
+    // Strips a stray leading bullet/number and surrounding **markdown** from one follow-up.
+    private static String cleanFollowUp(String raw) {
+        return raw.trim()
+                .replaceFirst("^\\s*(?:[-*•]\\s+|\\d+[.)]\\s+)", "")  // bullet / number prefix
+                .replaceAll("^\\*+|\\*+$", "")                          // surrounding **markdown**
+                .trim();
+    }
+
     static String stripFollowUpSection(String text) {
+        // Cut at the earliest of the first [[FU]] sentinel line or the legacy header, so the
+        // whole block leaves the prose whether or not the header itself was recognized.
+        int cut = -1;
+        Matcher m = FOLLOWUP_LINE.matcher(text);
+        if (m.find()) cut = m.start();
         int[] header = findFollowUpHeader(text);
-        if (header != null) return text.substring(0, header[0]);
-        return text;
+        if (header != null) cut = (cut < 0) ? header[0] : Math.min(cut, header[0]);
+        return (cut < 0) ? text : text.substring(0, cut);
     }
 
     // Locates the follow-up header: the strict start-of-line marker first, then the
