@@ -390,7 +390,7 @@ class GroqClientTest {
     void buildExchangePrompt_embedsInitialQuestionAndAnswer() {
         String prompt = GroqClient.buildExchangePrompt(
                 "What is polymorphism?", "", "It allows different types to share an interface.",
-                List.of(), "Ana", "Female", 5, "");
+                List.of(), "Ana", "Female", 5, "", "");
         assertTrue(prompt.contains("What is polymorphism?"),
                 "Initial question must be embedded in the exchange prompt");
         assertTrue(prompt.contains("different types to share an interface"),
@@ -403,7 +403,7 @@ class GroqClientTest {
                 new GroqClient.FollowUpTurn("Can you give an example?", "Like a Shape class")
         );
         String prompt = GroqClient.buildExchangePrompt(
-                "Q?", "", "Initial answer", turns, "", null, 5, "");
+                "Q?", "", "Initial answer", turns, "", null, 5, "", "");
         assertTrue(prompt.contains("Follow-up 1 (asked by the interviewer): Can you give an example?"),
                 "Follow-up question must appear as labeled turn in the exchange");
         assertTrue(prompt.contains("Candidate's answer to follow-up 1: Like a Shape class"),
@@ -412,7 +412,7 @@ class GroqClientTest {
 
     @Test
     void buildExchangePrompt_instructsHolisticAssessment() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("whole exchange") || prompt.contains("full exchange")
                         || prompt.contains("weighing the follow-up"),
                 "Exchange prompt must instruct holistic assessment across the whole exchange");
@@ -420,14 +420,14 @@ class GroqClientTest {
 
     @Test
     void buildExchangePrompt_requestsExactlyThreeFollowUps() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("exactly 3"),
                 "Exchange prompt must request exactly 3 follow-up questions (matching the 3 radios)");
     }
 
     @Test
     void buildExchangePrompt_requiresAtLeastOneFollowUpTiedToCandidateAnswer() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("At least one"),
                 "Exchange prompt must require at least one follow-up to build on the candidate's answer");
         assertTrue(prompt.contains("most recent answer"),
@@ -446,7 +446,7 @@ class GroqClientTest {
         // Assert the exact bridging phrase so a future indentation/continuation edit that
         // drops the trailing space is caught immediately rather than silently sending a
         // malformed prompt.
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("role. At least one"),
                 "The new instruction must join the preceding 'role.' sentence with exactly one space — "
                 + "a missing trailing space in the text-block continuation would concatenate words without a separator");
@@ -454,14 +454,14 @@ class GroqClientTest {
 
     @Test
     void buildExchangePrompt_containsFollowUpQuestionsMarker() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("FOLLOW-UP QUESTIONS:"),
                 "Exchange prompt must include the literal FOLLOW-UP QUESTIONS: marker");
     }
 
     @Test
     void buildExchangePrompt_ratingLineComesAfterFollowUpInstruction() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         int fuPos     = prompt.indexOf("FOLLOW-UP QUESTIONS:");
         int ratingPos = prompt.lastIndexOf("RATING: n/");
         assertTrue(fuPos     >= 0, "FOLLOW-UP QUESTIONS: must appear");
@@ -472,21 +472,21 @@ class GroqClientTest {
 
     @Test
     void buildExchangePrompt_fiveStarScale_emitsRatingN5() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("RATING: n/5"),
                 "5-star exchange prompt must request RATING: n/5");
     }
 
     @Test
     void buildExchangePrompt_tenStarScale_emitsRatingN10() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 10, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 10, "", "");
         assertTrue(prompt.contains("RATING: n/10"),
                 "10-star exchange prompt must request RATING: n/10");
     }
 
     @Test
     void buildExchangePrompt_invalidScale_fallsBackToFive() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 7, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 7, "", "");
         assertTrue(prompt.contains("RATING: n/5"),
                 "Unsupported scale must fall back to 5 stars");
     }
@@ -494,14 +494,14 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_containsSpeechToTextGuidance() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "", null, 5, "").toLowerCase();
+                "Q", "", "A", List.of(), "", null, 5, "", "").toLowerCase();
         assertTrue(prompt.contains("speech-to-text") || prompt.contains("speech recognition"),
                 "Exchange prompt must include STT tolerance guidance");
     }
 
     @Test
     void buildExchangePrompt_asksForProseNotBulletsAndEnglish() {
-        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "");
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("no bullet points"),
                 "Exchange prompt must ask for prose without bullet points");
         assertTrue(prompt.contains("Respond in English"),
@@ -511,7 +511,7 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_maleGender_usesHeHimPronouns() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "João", "Male", 5, "");
+                "Q", "", "A", List.of(), "João", "Male", 5, "", "");
         assertTrue(prompt.contains("he/him"),
                 "Male candidate must use he/him pronouns in exchange prompt");
     }
@@ -519,7 +519,7 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_femaleGender_usesSheHerPronouns() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "Ana", "Female", 5, "");
+                "Q", "", "A", List.of(), "Ana", "Female", 5, "", "");
         assertTrue(prompt.contains("she/her"),
                 "Female candidate must use she/her pronouns in exchange prompt");
     }
@@ -527,7 +527,7 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_nullGender_usesNeutralPronouns() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "", null, 5, "");
+                "Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("they/them"),
                 "Unspecified gender must use they/them pronouns in exchange prompt");
     }
@@ -536,7 +536,7 @@ class GroqClientTest {
     void buildExchangePrompt_withJobDescription_embedsVerbatim() {
         String jobDesc = "Staff engineer at a fintech startup";
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "", null, 5, jobDesc);
+                "Q", "", "A", List.of(), "", null, 5, jobDesc, "");
         assertTrue(prompt.contains(jobDesc),
                 "Job description must be embedded verbatim in the exchange prompt");
     }
@@ -544,7 +544,7 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_emptyJobDescription_fallback() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "", null, 5, "");
+                "Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("No job description was provided"),
                 "Empty job description must trigger the fallback message");
     }
@@ -552,7 +552,7 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_withExpectedAnswer_embedsItAndLabel() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "Use virtual threads", "A", List.of(), "", null, 5, "");
+                "Q", "Use virtual threads", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("Use virtual threads"),
                 "Expected answer must be embedded in the exchange prompt");
         assertTrue(prompt.contains("Expected answer"),
@@ -562,7 +562,7 @@ class GroqClientTest {
     @Test
     void buildExchangePrompt_emptyExpectedAnswer_usesOwnKnowledge() {
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "", "A", List.of(), "", null, 5, "");
+                "Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("No model answer was provided"),
                 "Empty expected answer must tell model to judge on its own expertise");
     }
@@ -573,7 +573,7 @@ class GroqClientTest {
     void buildFollowUpExpectedPrompt_embedsFollowUpAndInitialQuestion() {
         String prompt = GroqClient.buildFollowUpExpectedPrompt(
                 "Senior Java role", "Explain microservices migration.",
-                "We split the monolith by service.", "How did you keep data consistent?");
+                "We split the monolith by service.", "How did you keep data consistent?", "");
         assertTrue(prompt.contains("How did you keep data consistent?"),
                 "The follow-up question to guide must be embedded");
         assertTrue(prompt.contains("Explain microservices migration."),
@@ -585,7 +585,7 @@ class GroqClientTest {
     @Test
     void buildFollowUpExpectedPrompt_asksForSingleParagraphNoMarkdownEnglish() {
         String prompt = GroqClient.buildFollowUpExpectedPrompt(
-                "", "Q", "A", "Follow-up?");
+                "", "Q", "A", "Follow-up?", "");
         assertTrue(prompt.contains("single paragraph"), "Must ask for one paragraph");
         assertTrue(prompt.contains("no bullet points"), "Must forbid bullet points");
         assertTrue(prompt.contains("no markdown"),      "Must forbid markdown");
@@ -594,7 +594,7 @@ class GroqClientTest {
 
     @Test
     void buildFollowUpExpectedPrompt_blankInitialAnswer_usesPlaceholder() {
-        String prompt = GroqClient.buildFollowUpExpectedPrompt("", "Q", "  ", "Follow-up?");
+        String prompt = GroqClient.buildFollowUpExpectedPrompt("", "Q", "  ", "Follow-up?", "");
         assertTrue(prompt.contains("(not captured)"),
                 "A blank candidate answer must fall back to the (not captured) placeholder");
     }
@@ -603,10 +603,127 @@ class GroqClientTest {
     void buildExchangePrompt_nullFollowUps_treatedAsEmpty() {
         // Base case: null follow-up list must still produce a valid prompt
         String prompt = GroqClient.buildExchangePrompt(
-                "Q", "E", "A", null, "Carlos", "Male", 5, "Role desc");
+                "Q", "E", "A", null, "Carlos", "Male", 5, "Role desc", "");
         assertTrue(prompt.contains("FOLLOW-UP QUESTIONS:"),
                 "Null follow-up list must still produce a complete exchange prompt");
         assertTrue(prompt.contains("RATING: n/5"),
                 "Null follow-up list must still produce the rating instruction");
+    }
+
+    // ── cvSection helper ──────────────────────────────────────────────────────
+
+    @Test
+    void cvSection_withContent_includesLabelAndContent() {
+        String section = GroqClient.cvSection("10 years at Acme as SRE");
+        assertTrue(section.contains("Candidate's CV"),
+                "CV section must include the label preamble");
+        assertTrue(section.contains("10 years at Acme as SRE"),
+                "CV section must embed the CV text verbatim");
+    }
+
+    @Test
+    void cvSection_emptyNullBlank_returnsFallback() {
+        assertTrue(GroqClient.cvSection("").contains("No CV was provided"),
+                "Empty string must trigger CV fallback");
+        assertTrue(GroqClient.cvSection(null).contains("No CV was provided"),
+                "Null must trigger CV fallback");
+        assertTrue(GroqClient.cvSection("   ").contains("No CV was provided"),
+                "Blank string must trigger CV fallback");
+    }
+
+    // ── buildExchangePrompt — CV behavior ─────────────────────────────────────
+
+    @Test
+    void buildExchangePrompt_withCv_embedsVerbatim() {
+        String cv = "Senior SRE at Acme Corp, 2018-2024; expertise in Kubernetes";
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "", "A", List.of(), "", null, 5, "", cv);
+        assertTrue(prompt.contains(cv),
+                "Exchange prompt must embed the provided CV verbatim");
+    }
+
+    @Test
+    void buildExchangePrompt_emptyCv_fallback() {
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("No CV was provided"),
+                "Empty CV must trigger the no-CV fallback in the exchange prompt");
+    }
+
+    @Test
+    void buildExchangePrompt_softCvInstructionPresent() {
+        // Pass empty CV — the soft instruction is always present regardless of CV content
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("you may ground one or more"),
+                "Exchange prompt must contain the soft CV instruction 'you may ground one or more'");
+        assertTrue(prompt.contains("only when it fits naturally"),
+                "Exchange prompt must contain the soft CV instruction 'only when it fits naturally'");
+        // Regression: existing rule and count must remain intact
+        assertTrue(prompt.contains("At least one"),
+                "Existing 'At least one' constraint must still be present");
+        assertTrue(prompt.contains("most recent answer"),
+                "Existing 'most recent answer' anchor must still be present");
+        assertTrue(prompt.contains("exactly 3"),
+                "Prompt must still request exactly 3 follow-up questions");
+    }
+
+    @Test
+    void buildExchangePrompt_softCvInstruction_joinsCleanly() {
+        // Guards the text-block trailing-space continuations at the splice boundaries.
+        // A missing ' \' on the Java source line would drop the space and concatenate
+        // adjacent words without a separator, producing a malformed prompt silently.
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("generic probe. Where the candidate's CV"),
+                "Text-block continuation must join 'generic probe.' to 'Where the candidate's CV' with exactly one space");
+        assertTrue(prompt.contains("naturally. Output them"),
+                "Text-block continuation must join 'naturally.' to 'Output them' with exactly one space");
+    }
+
+    @Test
+    void buildExchangePrompt_tailUnchangedWithCv() {
+        // RATING tail and FOLLOW-UP QUESTIONS marker must survive when CV is present
+        String cv = "Backend engineer with 5 years Java experience";
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "", "A", List.of(), "", null, 5, "", cv);
+        assertTrue(prompt.contains("RATING: n/5"),
+                "RATING: n/5 tail must still be present when CV is provided");
+        assertTrue(prompt.lastIndexOf("RATING: n/") > prompt.indexOf("FOLLOW-UP QUESTIONS:"),
+                "RATING: n/ must still appear after FOLLOW-UP QUESTIONS: when CV is provided");
+    }
+
+    // ── buildFollowUpExpectedPrompt — CV behavior ─────────────────────────────
+
+    @Test
+    void buildFollowUpExpectedPrompt_withCv_embedsVerbatim() {
+        String cv = "Lead developer at StartupX, Python/Django, 2020-2023";
+        String prompt = GroqClient.buildFollowUpExpectedPrompt(
+                "Senior Java role", "Explain caching.", "We used Redis.", "How did you tune TTLs?", cv);
+        assertTrue(prompt.contains(cv),
+                "Follow-up expected prompt must embed the provided CV verbatim");
+    }
+
+    @Test
+    void buildFollowUpExpectedPrompt_emptyCv_fallback() {
+        String prompt = GroqClient.buildFollowUpExpectedPrompt(
+                "Senior Java role", "Explain caching.", "We used Redis.", "How did you tune TTLs?", "");
+        assertTrue(prompt.contains("No CV was provided"),
+                "Empty CV must trigger the no-CV fallback in the follow-up expected prompt");
+    }
+
+    // ── Regression: buildEvaluationPrompt must NOT receive the CV section ─────
+
+    @Test
+    void buildEvaluationPrompt_doesNotContainCvSectionOrSoftInstruction() {
+        // Spec §5/§16: buildEvaluationPrompt is out of scope and must remain byte-identical.
+        // This guard ensures a future edit does not accidentally copy CV logic into the legacy path.
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "", "A", "", null, 5, "");
+        assertFalse(prompt.contains("Candidate's CV"),
+                "buildEvaluationPrompt must NOT contain the CV label (out of scope per spec §16)");
+        assertFalse(prompt.contains("you may ground one or more"),
+                "buildEvaluationPrompt must NOT contain the soft CV instruction");
+        assertFalse(prompt.contains("No CV was provided"),
+                "buildEvaluationPrompt must NOT contain any CV fallback text");
     }
 }

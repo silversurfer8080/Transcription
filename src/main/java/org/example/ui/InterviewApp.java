@@ -156,6 +156,7 @@ public class InterviewApp extends Application {
     private VBox questionsBox;
     private ScrollPane questionsScroll;
     private TextArea jobDescArea;   // session-level full job description (collapsible top panel)
+    private TextArea cvArea;   // session-level candidate CV (collapsible top panel; not persisted)
 
     @Override
     public void start(Stage stage) {
@@ -391,8 +392,21 @@ public class InterviewApp extends Application {
         jobDescPane.setAnimated(true);
         jobDescPane.setGraphic(icon("mdi2c-comment-question-outline"));
 
-        VBox root = new VBox(jobDescPane, controls, new Separator(), questionsScroll);
+        // ── Candidate CV collapsible panel (top of window, under Job Description) ──
+        cvArea = new TextArea();
+        cvArea.setPromptText("Cole aqui o curriculo do candidato (CV)...");
+        cvArea.setWrapText(true);
+        cvArea.setPrefRowCount(4);
+        cvArea.setStyle(FORM_FONT_STYLE);
+
+        TitledPane cvPane = new TitledPane("Curriculo do Candidato (CV)", cvArea);
+        cvPane.setExpanded(false);
+        cvPane.setAnimated(true);
+        cvPane.setGraphic(icon("mdi2f-file-account-outline"));
+
+        VBox root = new VBox(jobDescPane, cvPane, controls, new Separator(), questionsScroll);
         VBox.setMargin(jobDescPane, new Insets(10, 10, 0, 10));
+        VBox.setMargin(cvPane, new Insets(6, 10, 0, 10));
         VBox.setVgrow(questionsScroll, Priority.ALWAYS);
         return root;
     }
@@ -1011,6 +1025,7 @@ public class InterviewApp extends Application {
         jobField.setDisable(false);
         jobField.clear();
         jobDescArea.clear();
+        cvArea.clear();
         sexCombo.setDisable(false);
         sexCombo.getSelectionModel().clearSelection();
         sexCombo.setValue(null);
@@ -1713,13 +1728,14 @@ public class InterviewApp extends Application {
                 return;
             }
             String jobDesc = jobDescArea.getText().trim();
+            String cv = cvArea.getText().trim();
             String iq = questionArea.getText().trim();
             String ia = answerArea.getText().trim();
             r.expectedArea.setPromptText("Gerando gabarito…");
             Thread.ofVirtual().name("followup-expected-q" + number).start(() -> {
                 try {
                     String expected = GroqClient.generateFollowUpExpected(
-                            provider, key, jobDesc, iq, ia, followUpQuestion);
+                            provider, key, jobDesc, iq, ia, followUpQuestion, cv);
                     Platform.runLater(() -> {
                         // Don't clobber anything the interviewer typed while it generated.
                         if (r.expectedArea.getText().isBlank() && expected != null) {
@@ -1812,6 +1828,7 @@ public class InterviewApp extends Application {
             String sex       = sexCombo.getValue();   // "Male" / "Female" / null
             int    scale     = "10".equals(scaleCombo.getValue()) ? 10 : 5;
             String jobDesc   = jobDescArea.getText().trim();
+            String cv        = cvArea.getText().trim();
 
             if (key.isEmpty())       { showAlert("Chave de API ausente", "Informe a chave de " + provider + " no painel \"Chaves de API\" no topo."); return; }
             if (question.isEmpty())  { showAlert("Pergunta vazia",  "Preencha ou cole a pergunta na coluna QUESTION."); return; }
@@ -1835,7 +1852,7 @@ public class InterviewApp extends Application {
             Thread.ofVirtual().name("answer-evaluate-q" + number).start(() -> {
                 try {
                     String result = GroqClient.evaluateExchange(
-                            provider, key, question, expected, candidate, turns, name, sex, scale, jobDesc);
+                            provider, key, question, expected, candidate, turns, name, sex, scale, jobDesc, cv);
                     AnalysisResult analysis = AnalysisResult.parse(result, scale);
                     Platform.runLater(() -> {
                         analysisArea.setText(analysis.prose());
