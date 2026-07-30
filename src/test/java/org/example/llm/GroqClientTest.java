@@ -677,8 +677,22 @@ class GroqClientTest {
                 "Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("generic probe. Where the candidate's CV"),
                 "Text-block continuation must join 'generic probe.' to 'Where the candidate's CV' with exactly one space");
-        assertTrue(prompt.contains("naturally. Output them"),
-                "Text-block continuation must join 'naturally.' to 'Output them' with exactly one space");
+        assertTrue(prompt.contains("naturally. Output the three follow-up questions"),
+                "Text-block continuation must join 'naturally.' to 'Output the three follow-up questions' with exactly one space");
+    }
+
+    @Test
+    void buildExchangePrompt_mandatesFollowUpSentinel() {
+        // The parser (AnalysisResult) keys off the [[FU]] per-line sentinel; the prompt must
+        // keep instructing it, or the two drift and follow-ups leak into the prose again.
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("[[FU]]"),
+                "Prompt must instruct the [[FU]] per-line sentinel the parser depends on");
+        assertTrue(prompt.contains("FOLLOW-UP QUESTIONS:"),
+                "The FOLLOW-UP QUESTIONS: header line must remain");
+        assertTrue(prompt.contains("RATING: n/5"),
+                "The RATING tail must remain after the follow-up section");
     }
 
     @Test

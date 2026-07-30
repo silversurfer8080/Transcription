@@ -310,13 +310,14 @@ public class GroqClient {
                 follow-ups in specific items from it (a role, project, technology, or claim on \
                 the CV) and how they relate to what this role requires, but only when it fits \
                 naturally. \
-                Output them in a dedicated section starting with a line containing exactly \
-                FOLLOW-UP QUESTIONS: followed by each follow-up question on its own line \
-                prefixed with "- ". That header line must be exactly FOLLOW-UP QUESTIONS: on \
-                its own line — no lead-in sentence such as "Here are", no numbering and no \
-                markdown before it. After the follow-up questions block, output the score for \
-                the whole exchange on its own very last line in exactly this format, with no \
-                extra words: RATING: n/%d
+                Output the three follow-up questions in a dedicated section: first a line \
+                containing exactly FOLLOW-UP QUESTIONS:, then each follow-up on its own line \
+                that begins with the exact token [[FU]] followed by a single space and then \
+                the question, with nothing else on that line (no numbering, no bullets, no \
+                markdown, and no text before the [[FU]] token). Do not repeat or restate the \
+                follow-up questions anywhere else in your reply. After the follow-up questions, \
+                output the score for the whole exchange on its own very last line in exactly \
+                this format, with no extra words: RATING: n/%d
                 """.formatted(whoLine(candidateName, gender), jobSection(jobDescription),
                         cvSection(candidateCv), question, expectedSection(expectedAnswer),
                         conversation, scaleGuide(max), max);
