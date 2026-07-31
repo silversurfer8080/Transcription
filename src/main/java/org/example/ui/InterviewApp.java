@@ -1,6 +1,8 @@
 package org.example.ui;
 
+import javafx.animation.KeyFrame;
 import javafx.animation.PauseTransition;
+import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
@@ -32,6 +34,8 @@ import org.example.audio.AudioDevices;
 import org.example.llm.AnalysisResult;
 import org.example.llm.GroqClient;
 import org.example.llm.LlmProvider;
+import org.example.llm.OllamaKeepAlive;
+import org.example.llm.OllamaStatus;
 import org.example.session.SessionCodec;
 import org.example.stt.GeminiSttProvider;
 import org.example.stt.GroqWhisperModel;
@@ -133,6 +137,15 @@ public class InterviewApp extends Application {
     private HBox voskModelRow;               // shown only when Vosk is the STT engine
     private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
     private HBox groqModelRow;               // shown only when Groq is the STT engine
+    // "Modelo local" row (shown only when LlmProvider.LOCAL is the analysis provider)
+    private HBox        localModelRow;
+    private CheckBox    keepWarmToggle;      // "Manter ativo", default OFF
+    private Label       localStatusLabel;   // live status / countdown
+    private Timeline    ollamaPoller;       // ~5s /api/ps poll; started/stopped with row visibility
+    private final AtomicBoolean ollamaPollInFlight = new AtomicBoolean(false);
+    private volatile boolean localModelPinnedByUs = false; // this app pinned the model
+    private final OllamaKeepAlive ollamaKeepAlive =
+            new OllamaKeepAlive(LlmProvider.LOCAL.endpoint(), LlmProvider.LOCAL.defaultModel());
     // Live Groq quota gauge (requests/day remaining, fed by GroqWhisperProvider's rate-limit headers)
     private ProgressBar groqReqBar;
     private Label groqReqValue;
@@ -214,6 +227,7 @@ public class InterviewApp extends Application {
         llmProviderCombo = new ComboBox<>(FXCollections.observableArrayList(LlmProvider.values()));
         llmProviderCombo.setValue(LlmProvider.GEMINI);   // most generous free tier
         llmProviderCombo.setStyle(FORM_FONT_STYLE);
+        llmProviderCombo.setOnAction(e -> updateLlmProviderRows());
 
         Button powerBtn = new Button("");
         powerBtn.setGraphic(icon("mdi2p-power"));
@@ -264,7 +278,24 @@ public class InterviewApp extends Application {
         groqModelRow = new HBox(12, formLabel("Modelo Whisper:"), whisperModelCombo, groqQuotaGauge);
         groqModelRow.setAlignment(Pos.CENTER_LEFT);
 
+        // ── Local Ollama model row (shown only when LOCAL is the analysis provider) ──
+        keepWarmToggle = new CheckBox("Manter ativo");
+        keepWarmToggle.setSelected(false);
+        keepWarmToggle.setStyle(FORM_FONT_STYLE);
+        keepWarmToggle.setTooltip(new Tooltip(
+                "Mantém o modelo local carregado na VRAM para evitar o cold-start (~2 min) da primeira análise."));
+        keepWarmToggle.setOnAction(e -> onKeepWarmToggle());
+
+        localStatusLabel = new Label("descarregado");
+        localStatusLabel.getStyleClass().add("quota-value");
+        bindQuotaFont(localStatusLabel);   // scale with A-/A+ like the other gauges
+
+        localModelRow = new HBox(12,
+                formLabel("Modelo local:"), keepWarmToggle, localStatusLabel);
+        localModelRow.setAlignment(Pos.CENTER_LEFT);
+
         updateSttModelRows();
+        updateLlmProviderRows();   // sets initial hidden state (default = GEMINI, so row starts hidden)
 
         // ── Row 2: name + job + company + sex + stars ────────────────────────
         candidateField = new TextField();
@@ -368,7 +399,7 @@ public class InterviewApp extends Application {
                 vertSep, fontLabel, fontDecBtn, fontIncBtn);
         row4.setAlignment(Pos.CENTER_LEFT);
 
-        VBox controls = new VBox(8, keysPane, row1, voskModelRow, groqModelRow, row2, row3, row4);
+        VBox controls = new VBox(8, keysPane, row1, voskModelRow, groqModelRow, localModelRow, row2, row3, row4);
         controls.setPadding(new Insets(10));
 
         // ── Questions scroll area ────────────────────────────────────────────
@@ -428,6 +459,171 @@ public class InterviewApp extends Application {
     private static String defaultVoskModelDir() {
         return Path.of(System.getProperty("user.home"),
                 "Flocareer", "models", "vosk-model-small-en-us-0.15").toString();
+    }
+
+    // ── Local Ollama model row helpers ────────────────────────────────────────
+
+    /**
+     * Shows or hides the "Modelo local" row, and drives polling + auto-unload when
+     * the provider changes. Called from the llmProviderCombo onAction and once at init.
+     */
+    private void updateLlmProviderRows() {
+        LlmProvider p = llmProviderCombo.getValue();
+        boolean local = (p == LlmProvider.LOCAL);
+        if (localModelRow != null) {
+            localModelRow.setVisible(local);
+            localModelRow.setManaged(local);   // collapse layout space when hidden
+        }
+        if (local) {
+            startOllamaPolling();              // includes an immediate one-shot poll
+        } else {
+            stopOllamaPolling();
+            if (localModelPinnedByUs) unloadLocalModelAsync();  // free VRAM, best-effort
+        }
+    }
+
+    /** Builds and plays the ~5 s Timeline poller, plus fires one immediate poll. */
+    private void startOllamaPolling() {
+        stopOllamaPolling();   // stop any previous poller before creating a new one
+        ollamaPoller = new Timeline(new KeyFrame(
+                javafx.util.Duration.seconds(5), e -> pollOllamaOnce()));
+        ollamaPoller.setCycleCount(Timeline.INDEFINITE);
+        ollamaPoller.play();
+        pollOllamaOnce();      // immediate first poll so the status shows right away
+    }
+
+    /** Stops the polling Timeline (null-safe). */
+    private void stopOllamaPolling() {
+        if (ollamaPoller != null) {
+            ollamaPoller.stop();
+            ollamaPoller = null;
+        }
+    }
+
+    /**
+     * Guards against overlapping polls with a CAS flag, then spawns an "ollama-poll"
+     * virtual thread that calls {@link OllamaKeepAlive#poll()} and marshals the result
+     * back to the FX thread.
+     */
+    private void pollOllamaOnce() {
+        if (localModelRow == null || !localModelRow.isVisible()) return;
+        if (!ollamaPollInFlight.compareAndSet(false, true)) return;   // skip overlapping tick
+        Thread.ofVirtual().name("ollama-poll").start(() -> {
+            OllamaStatus st;
+            try {
+                st = ollamaKeepAlive.poll();
+            } catch (Exception ex) {
+                st = OllamaStatus.unavailable();
+            }
+            final OllamaStatus fst = st;
+            Platform.runLater(() -> {
+                renderOllamaStatus(fst);
+                ollamaPollInFlight.set(false);
+            });
+        });
+    }
+
+    /** Renders the Ollama status into the label (text + color). FX-thread only. */
+    private void renderOllamaStatus(OllamaStatus st) {
+        String text;
+        String color;
+        switch (st.state()) {
+            case UNLOADED -> {
+                text  = "descarregado";
+                color = "#6B7280";   // gray
+            }
+            case PINNED -> {
+                text  = "ativo - fixado";
+                color = "#16A34A";   // green
+            }
+            case EXPIRING -> {
+                text  = "ativo - expira em " + OllamaStatus.formatCountdown(st.remainingSeconds());
+                color = "#F59E0B";   // amber
+            }
+            default -> {             // UNAVAILABLE
+                text  = "Ollama indisponivel";
+                color = "#DC2626";   // red
+            }
+        }
+        if (localStatusLabel != null) {
+            localStatusLabel.setText(text);
+            localStatusLabel.setStyle("-fx-text-fill: " + color + ";");
+        }
+    }
+
+    /** Checkbox action handler: pin on check-ON, unload on check-OFF. */
+    private void onKeepWarmToggle() {
+        if (llmProviderCombo.getValue() != LlmProvider.LOCAL) return;   // safety guard
+        if (keepWarmToggle.isSelected()) {
+            localStatusLabel.setText("ativando...");
+            Thread.ofVirtual().name("ollama-pin").start(() -> {
+                try {
+                    ollamaKeepAlive.pin();
+                    localModelPinnedByUs = true;
+                    Platform.runLater(this::pollOllamaOnce);
+                } catch (Exception ex) {
+                    log.warn("Ollama pin failed: {}", translateLlmError(ex.getMessage()));
+                    Platform.runLater(() -> {
+                        keepWarmToggle.setSelected(false);              // revert on failure
+                        renderOllamaStatus(OllamaStatus.unavailable());
+                    });
+                }
+            });
+        } else {
+            unloadLocalModelAsync();
+        }
+    }
+
+    /**
+     * Spawns an "ollama-warm" virtual thread that pins the model.
+     * Used on session start when keepWarmToggle is ON.
+     */
+    private void warmLocalModelAsync() {
+        Thread.ofVirtual().name("ollama-warm").start(() -> {
+            try {
+                ollamaKeepAlive.pin();
+                localModelPinnedByUs = true;
+                Platform.runLater(this::pollOllamaOnce);
+            } catch (Exception ex) {
+                log.warn("Ollama warm on session start failed: {}", translateLlmError(ex.getMessage()));
+                // Don't revert the checkbox — the user preference is kept; next poll shows reality.
+                Platform.runLater(() -> renderOllamaStatus(OllamaStatus.unavailable()));
+            }
+        });
+    }
+
+    /**
+     * Spawns an "ollama-unload" virtual thread that unloads the model.
+     * Guarded by {@code localModelPinnedByUs}; clears the flag on success.
+     */
+    private void unloadLocalModelAsync() {
+        if (!localModelPinnedByUs) return;
+        Thread.ofVirtual().name("ollama-unload").start(() -> {
+            try {
+                ollamaKeepAlive.unload();
+            } catch (Exception ex) {
+                log.warn("Ollama unload failed: {}", translateLlmError(ex.getMessage()));
+            } finally {
+                localModelPinnedByUs = false;
+                Platform.runLater(this::pollOllamaOnce);
+            }
+        });
+    }
+
+    /**
+     * Best-effort synchronous unload — used only from {@link #stop()} (app shutdown).
+     * Bounded by the 10 s unload timeout; typically instant on loopback or
+     * immediate connection-refused if Ollama is no longer running.
+     */
+    private void unloadLocalModelBlocking() {
+        if (!localModelPinnedByUs) return;
+        try {
+            ollamaKeepAlive.unload();
+        } catch (Exception ex) {
+            log.warn("Ollama blocking unload on shutdown failed: {}", ex.getMessage());
+        } finally {
+            localModelPinnedByUs = false;
+        }
     }
 
     /** Shows the model row relevant to the selected STT engine (Vosk dir / Groq model). */
@@ -840,6 +1036,12 @@ public class InterviewApp extends Application {
             log.warn("STT: {}", msg);
         }));
 
+        // If LOCAL provider and "Manter ativo" is ON, warm the model off the FX thread
+        // so the first analysis is not a cold start. Does not block session start.
+        if (llmProviderCombo.getValue() == LlmProvider.LOCAL && keepWarmToggle.isSelected()) {
+            warmLocalModelAsync();
+        }
+
         Thread.ofVirtual().name("start-session").start(() -> {
             try {
                 // Only the candidate channel is captured and transcribed. The provider
@@ -887,6 +1089,9 @@ public class InterviewApp extends Application {
         sessionBtn.setDisable(true);
         newQuestionBtn.setDisable(true);
         saveSessionBtn.setDisable(true);
+
+        // Unload the local model if this app pinned it (frees VRAM; best-effort)
+        if (localModelPinnedByUs) unloadLocalModelAsync();
 
         if (activeQuestion != null) { activeQuestion.markStopped(); activeQuestion = null; }
         // Flush the latest content but KEEP sessionTxtPath so the file can still be
@@ -1316,7 +1521,10 @@ public class InterviewApp extends Application {
     private void onWindowClose() { if (sessionRunning) stopSession(); }
 
     @Override
-    public void stop() { if (sessionRunning) stopSession(); }
+    public void stop() {
+        if (sessionRunning) stopSession();
+        unloadLocalModelBlocking();   // best-effort blocking unload if the model was pinned by us
+    }
 
     // ══════════════════════════════════════════════════════════════════════
     // QuestionPanel — one per interview question
