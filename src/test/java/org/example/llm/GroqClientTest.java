@@ -677,8 +677,8 @@ class GroqClientTest {
                 "Q", "", "A", List.of(), "", null, 5, "", "");
         assertTrue(prompt.contains("generic probe. Where the candidate's CV"),
                 "Text-block continuation must join 'generic probe.' to 'Where the candidate's CV' with exactly one space");
-        assertTrue(prompt.contains("naturally. Output the three follow-up questions"),
-                "Text-block continuation must join 'naturally.' to 'Output the three follow-up questions' with exactly one space");
+        assertTrue(prompt.contains("naturally. When an expected answer"),
+                "After the steer edit, the CV sentence now joins the steer sentence with one space");
     }
 
     @Test
@@ -726,6 +726,50 @@ class GroqClientTest {
                 "Empty CV must trigger the no-CV fallback in the follow-up expected prompt");
     }
 
+    // ── buildExchangePrompt — steer follow-ups toward missing expected points ──
+
+    @Test
+    void buildExchangePrompt_withExpectedAnswer_steersFollowUpsToMissingPoints() {
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "Use a ConcurrentHashMap and size it up front", "A",
+                List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("significantly diverges"),
+                "Steer instruction must be present when an expected answer is provided");
+        assertTrue(prompt.contains("missing expected points"),
+                "Steer instruction must reference steering toward the missing expected points");
+        assertTrue(prompt.contains("chance to reach it"),
+                "Steer instruction tail phrase must be present");
+    }
+
+    @Test
+    void buildExchangePrompt_steerSentencePresentEvenWhenExpectedEmpty() {
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("steer the candidate toward those missing expected points"),
+                "Steer sentence is fixed prompt text; present regardless of expected-answer content");
+    }
+
+    @Test
+    void buildExchangePrompt_steerEdit_keepsTailAndRulesIntact() {
+        String prompt = GroqClient.buildExchangePrompt(
+                "Q", "Expected key points here", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("[[FU]]"),               "[[FU]] sentinel instruction must remain");
+        assertTrue(prompt.contains("FOLLOW-UP QUESTIONS:"), "FOLLOW-UP QUESTIONS: header must remain");
+        assertTrue(prompt.contains("exactly 3"),            "exactly 3 follow-ups must remain");
+        assertTrue(prompt.contains("most recent answer"),   "most-recent-answer rule must remain");
+        assertTrue(prompt.lastIndexOf("RATING: n/") > prompt.indexOf("FOLLOW-UP QUESTIONS:"),
+                "RATING: n/ must still come after the FOLLOW-UP QUESTIONS: header");
+        assertTrue(prompt.contains("RATING: n/5"),          "5-scale RATING tail must remain");
+    }
+
+    @Test
+    void buildExchangePrompt_steerSentence_joinsCleanlyAtBothBoundaries() {
+        String prompt = GroqClient.buildExchangePrompt("Q", "", "A", List.of(), "", null, 5, "", "");
+        assertTrue(prompt.contains("naturally. When an expected answer"),
+                "Boundary A: CV sentence must join the steer sentence with exactly one space");
+        assertTrue(prompt.contains("reach it. Output the three follow-up questions"),
+                "Boundary B: steer sentence must join the output instruction with exactly one space");
+    }
+
     // ── Regression: buildEvaluationPrompt must NOT receive the CV section ─────
 
     @Test
@@ -739,5 +783,23 @@ class GroqClientTest {
                 "buildEvaluationPrompt must NOT contain the soft CV instruction");
         assertFalse(prompt.contains("No CV was provided"),
                 "buildEvaluationPrompt must NOT contain any CV fallback text");
+    }
+
+    @Test
+    void buildEvaluationPrompt_doesNotContainSteerSentence() {
+        // Spec §16 (out of scope) and AC4: buildEvaluationPrompt must remain byte-identical.
+        // The steer sentence ("significantly diverges ... missing expected points ...
+        // chance to reach it") belongs exclusively to buildExchangePrompt; these unique
+        // substrings must be absent from the legacy single-Q&A evaluation path so a future
+        // accidental copy-paste into the wrong method is caught immediately.
+        String prompt = GroqClient.buildEvaluationPrompt("Q", "Expected key points", "A", "", null, 5, "");
+        assertFalse(prompt.contains("significantly diverges"),
+                "buildEvaluationPrompt must NOT contain 'significantly diverges' — steer sentence belongs to buildExchangePrompt only (spec §16 / AC4)");
+        assertFalse(prompt.contains("missing expected points"),
+                "buildEvaluationPrompt must NOT contain 'missing expected points' — steer sentence belongs to buildExchangePrompt only (spec §16 / AC4)");
+        assertFalse(prompt.contains("steer the candidate"),
+                "buildEvaluationPrompt must NOT contain 'steer the candidate' — steer sentence belongs to buildExchangePrompt only (spec §16 / AC4)");
+        assertFalse(prompt.contains("chance to reach it"),
+                "buildEvaluationPrompt must NOT contain 'chance to reach it' — steer sentence belongs to buildExchangePrompt only (spec §16 / AC4)");
     }
 }

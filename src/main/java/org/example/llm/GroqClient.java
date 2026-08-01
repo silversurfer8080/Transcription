@@ -310,6 +310,11 @@ public class GroqClient {
                 follow-ups in specific items from it (a role, project, technology, or claim on \
                 the CV) and how they relate to what this role requires, but only when it fits \
                 naturally. \
+                When an expected answer is provided and the candidate's response significantly \
+                diverges from or misses its key points, at least one follow-up should steer the \
+                candidate toward those missing expected points, probing the specific concept, \
+                step, or criterion from the ideal answer that they skipped or got wrong, so the \
+                next round gives them a chance to reach it. \
                 Output the three follow-up questions in a dedicated section: first a line \
                 containing exactly FOLLOW-UP QUESTIONS:, then each follow-up on its own line \
                 that begins with the exact token [[FU]] followed by a single space and then \
