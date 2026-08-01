@@ -1093,7 +1093,7 @@ public class InterviewApp extends Application {
         // Unload the local model if this app pinned it (frees VRAM; best-effort)
         if (localModelPinnedByUs) unloadLocalModelAsync();
 
-        if (activeQuestion != null) { activeQuestion.markStopped(); activeQuestion = null; }
+        if (activeQuestion != null) { activeQuestion.markStopped(false); activeQuestion = null; }
         // Flush the latest content but KEEP sessionTxtPath so the file can still be
         // discarded after stopping (Stop does not null the path; Fechar/Descartar do).
         persistSessionTxt();
@@ -1156,7 +1156,7 @@ public class InterviewApp extends Application {
 
     private void stopQuestion(QuestionPanel q) {
         if (activeQuestion == q) activeQuestion = null;
-        q.markStopped();
+        q.markStopped(false);
     }
 
     private void onSaveSession() {
@@ -1972,12 +1972,16 @@ public class InterviewApp extends Application {
         // ── Stop / resume ────────────────────────────────────────────────
 
         void markStopped() {
+            markStopped(true);
+        }
+
+        void markStopped(boolean collapse) {
             if (!active.compareAndSet(true, false)) return;
             Platform.runLater(() -> {
                 stopBtn.setDisable(true);
                 continueBtn.setDisable(!sessionRunning);
                 setPartialText("");
-                titledPane.setExpanded(false);
+                if (collapse) titledPane.setExpanded(false);
                 updateTitle();
                 log.info("Question {} stopped", number);
             });
