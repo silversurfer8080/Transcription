@@ -36,6 +36,10 @@ dependencies {
 
     implementation("org.slf4j:slf4j-api:2.0.13")
     implementation("ch.qos.logback:logback-classic:1.5.6")
+    // Structured JSON logging encoder for logback (Loki/ELK/Datadog ingestion).
+    // 8.0 targets logback 1.5.x + jackson 2.17.x — matches this project. If build
+    // resolution conflicts, fall back to 7.4 (logback 1.3+/jackson 2.14+ compatible).
+    implementation("net.logstash.logback:logstash-logback-encoder:8.0")
 
     implementation("org.kordamp.ikonli:ikonli-javafx:12.3.1")
     implementation("org.kordamp.ikonli:ikonli-materialdesign2-pack:12.3.1")

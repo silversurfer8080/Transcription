@@ -51,6 +51,7 @@ import org.example.stt.TranscriptEvent;
 import org.example.stt.VoskSttProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.net.URI;
@@ -67,7 +68,10 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static net.logstash.logback.argument.StructuredArguments.kv;
 
 /**
  * Main application window — a single Interview tab: candidate-channel capture
@@ -1504,6 +1508,14 @@ public class InterviewApp extends Application {
             return "Não foi possível conectar ao provedor de análise. Se estiver usando "
                     + "\"Local — Ollama\", confirme que o Ollama está aberto (porta 11434) e que "
                     + "o modelo foi baixado (ollama pull). (" + msg + ")";
+        // Request timeout (java.net.http.HttpTimeoutException -> "request timed out"): the provider
+        // accepted the connection but did not answer within the request timeout. A cold local model
+        // can hit the ~2 min first load; otherwise the provider is slow or stuck.
+        if (msg.contains("request timed out") || msg.contains("HttpTimeoutException"))
+            return "A análise excedeu o tempo limite — o provedor demorou demais para responder. "
+                    + "Se estiver usando \"Local — Ollama\", pode ser o carregamento inicial do "
+                    + "modelo: ative \"Manter ativo\" e tente de novo. Em provedores de nuvem, "
+                    + "tente novamente ou troque de provedor.";
         if (msg.contains("HTTP_401")) return "API key inválida ou expirada. Verifique a chave do provedor selecionado.";
         if (msg.contains("HTTP_403")) return "Acesso negado (403). Verifique as permissões da API key.";
         // Gemini (e outros) devolvem 400 para chave inválida/expirada ou API não habilitada —
@@ -1941,7 +1953,13 @@ public class InterviewApp extends Application {
             String ia = answerArea.getText().trim();
             r.expectedArea.setPromptText("Gerando gabarito…");
             Thread.ofVirtual().name("followup-expected-q" + number).start(() -> {
+                String analysisId = UUID.randomUUID().toString();
+                MDC.put("analysisId", analysisId);
+                MDC.put("provider", provider.shortName());
+                MDC.put("model", provider.defaultModel());
+                MDC.put("qNumber", String.valueOf(number));
                 try {
+                    log.info("expected.start", kv("followUpChars", followUpQuestion.length()));
                     String expected = GroqClient.generateFollowUpExpected(
                             provider, key, jobDesc, iq, ia, followUpQuestion, cv);
                     Platform.runLater(() -> {
@@ -1953,9 +1971,11 @@ public class InterviewApp extends Application {
                         persistSessionTxt();
                     });
                 } catch (Exception ex) {
-                    log.error("Follow-up expected generation failed (q{})", number, ex);
+                    log.error("expected.failure", kv("errorClass", ex.getClass().getSimpleName()), ex);
                     Platform.runLater(() -> r.expectedArea.setPromptText(
                             "Falha ao gerar gabarito: " + translateLlmError(ex.getMessage())));
+                } finally {
+                    MDC.clear();
                 }
             });
         }
@@ -2062,10 +2082,35 @@ public class InterviewApp extends Application {
             showFollowUpOptions(List.of());   // clear any unconsumed previous set
 
             Thread.ofVirtual().name("answer-evaluate-q" + number).start(() -> {
+                String analysisId = UUID.randomUUID().toString();
+                MDC.put("analysisId", analysisId);
+                MDC.put("provider", provider.shortName());
+                MDC.put("model", provider.defaultModel());
+                MDC.put("qNumber", String.valueOf(number));
+                long t0 = System.nanoTime();
                 try {
+                    log.info("analysis.start",
+                            kv("rounds", turns.size()),
+                            kv("candidateChars", candidate.length()),
+                            kv("questionChars", question.length()));
+
                     String result = GroqClient.evaluateExchange(
                             provider, key, question, expected, candidate, turns, name, sex, scale, jobDesc, cv);
                     AnalysisResult analysis = AnalysisResult.parse(result, scale);
+
+                    long durationMs = (System.nanoTime() - t0) / 1_000_000;
+                    log.info("analysis.success",
+                            kv("ratingScore", analysis.score()),
+                            kv("hasRating", analysis.hasRating()),
+                            kv("followUpCount", analysis.followUps().size()),
+                            kv("durationMs", durationMs));
+                    if (analysis.followUps().isEmpty() || !analysis.hasRating()) {
+                        log.warn("analysis.parse_anomaly",
+                                kv("hasRating", analysis.hasRating()),
+                                kv("followUpCount", analysis.followUps().size()),
+                                kv("ratingScore", analysis.score()));
+                    }
+
                     Platform.runLater(() -> {
                         analysisArea.setText(analysis.prose());
                         ratingLabel.setText(analysis.stars());
@@ -2075,13 +2120,19 @@ public class InterviewApp extends Application {
                         resetAnalyzeBtn();
                     });
                 } catch (Exception ex) {
-                    log.error("Per-question evaluation failed (q{})", number, ex);
+                    long durationMs = (System.nanoTime() - t0) / 1_000_000;
+                    log.error("analysis.failure",
+                            kv("errorClass", ex.getClass().getSimpleName()),
+                            kv("durationMs", durationMs),
+                            ex);
                     String detail = translateLlmError(ex.getMessage());
                     Platform.runLater(() -> {
                         analysisArea.setText("Erro: " + detail);
                         showFollowUpOptions(List.of());
                         resetAnalyzeBtn();
                     });
+                } finally {
+                    MDC.clear();
                 }
             });
         }

@@ -802,4 +802,140 @@ class GroqClientTest {
         assertFalse(prompt.contains("chance to reach it"),
                 "buildEvaluationPrompt must NOT contain 'chance to reach it' — steer sentence belongs to buildExchangePrompt only (spec §16 / AC4)");
     }
+
+    // ── bodySnippet ────────────────────────────────────────────────────────────
+    //
+    // bodySnippet is a package-private static helper on GroqClient:
+    //   static String bodySnippet(String body)
+    // It: (1) returns "" for null/blank input, (2) collapses all whitespace sequences
+    // to a single space and trims, (3) redacts fields whose name contains
+    // "token", "key", or "auth"/"authorization" (case-insensitive), and (4) truncates
+    // to <=200 chars appending "..." (total 203) when needed.
+    //
+    // Each test below asserts the ACTUAL code behavior, verified by tracing the
+    // regex `(?i)(token|key|auth(orization)?)[^\s]*\s*[=:]?\s*\S+` against real inputs.
+
+    @Test
+    void bodySnippet_null_returnsEmpty() {
+        assertEquals("", GroqClient.bodySnippet(null),
+                "null body must return an empty string, never null");
+    }
+
+    @Test
+    void bodySnippet_blankWhitespaceOnly_returnsEmpty() {
+        assertEquals("", GroqClient.bodySnippet("   "),
+                "Whitespace-only body must return an empty string");
+    }
+
+    @Test
+    void bodySnippet_emptyString_returnsEmpty() {
+        assertEquals("", GroqClient.bodySnippet(""),
+                "Empty string body must return an empty string");
+    }
+
+    @Test
+    void bodySnippet_shortBodyNoRedactableFields_returnedUnchanged() {
+        // No whitespace to collapse, no token/key/auth field names → identity transform.
+        String body = "{\"error\":{\"message\":\"nope\"}}";
+        String snippet = GroqClient.bodySnippet(body);
+        assertEquals(body, snippet,
+                "Short body with no redactable fields must be returned unchanged");
+        assertTrue(snippet.length() <= 200,
+                "Short body snippet must not exceed 200 chars");
+        assertFalse(snippet.endsWith("..."),
+                "Short body must not have an ellipsis suffix");
+    }
+
+    @Test
+    void bodySnippet_multilineBody_collapsedToSingleLine() {
+        // replaceAll("\\s+", " ") converts any whitespace run (including \n and \t) to
+        // a single space; trim() removes leading/trailing.
+        String body = "line1\n\tline2\t\nline3";
+        String snippet = GroqClient.bodySnippet(body);
+        assertFalse(snippet.contains("\n"), "Result must not contain newlines after collapse");
+        assertFalse(snippet.contains("\t"), "Result must not contain tabs after collapse");
+        assertTrue(snippet.contains("line1"), "Non-whitespace content must be preserved");
+        assertTrue(snippet.contains("line2"), "Non-whitespace content must be preserved");
+        assertTrue(snippet.contains("line3"), "Non-whitespace content must be preserved");
+    }
+
+    @Test
+    void bodySnippet_consecutiveWhitespace_collapsedToSingleSpace() {
+        // A run of mixed whitespace characters collapses to exactly one space.
+        String body = "word1\n\n\t  word2";
+        String snippet = GroqClient.bodySnippet(body);
+        assertEquals("word1 word2", snippet,
+                "Multiple consecutive whitespace chars must be collapsed to a single space");
+    }
+
+    @Test
+    void bodySnippet_bodyOver200Chars_truncatedTo203WithEllipsis() {
+        // Truncation: substring(0, 200) + "..." → total length 203.
+        String body = "a".repeat(500);
+        String snippet = GroqClient.bodySnippet(body);
+        assertEquals(203, snippet.length(),
+                "Truncated snippet must be 200 content chars + 3 ellipsis chars = 203 total");
+        assertTrue(snippet.endsWith("..."),
+                "Truncated snippet must end with '...'");
+    }
+
+    @Test
+    void bodySnippet_bodyExactly200Chars_notTruncated() {
+        // The guard is `length <= 200`, so exactly 200 must pass without truncation.
+        String body = "a".repeat(200);
+        String snippet = GroqClient.bodySnippet(body);
+        assertEquals(200, snippet.length(),
+                "Body of exactly 200 chars must not be truncated");
+        assertFalse(snippet.endsWith("..."),
+                "Body of exactly 200 chars must not have an ellipsis suffix");
+    }
+
+    @Test
+    void bodySnippet_body201Chars_truncated() {
+        // One char over the limit → truncated.
+        String body = "a".repeat(201);
+        String snippet = GroqClient.bodySnippet(body);
+        assertEquals(203, snippet.length(),
+                "Body of 201 chars must be truncated: 200 content chars + '...'");
+        assertTrue(snippet.endsWith("..."));
+    }
+
+    @Test
+    void bodySnippet_apiKeyField_secretValueIsRedacted() {
+        // The regex matches "key" inside "api_key"; [^\s]* then greedily consumes the rest
+        // of the non-whitespace sequence through the colon and value, backtracking one char
+        // to let \S+ match the closing `}`. The secret "sk-secret123" is inside the match
+        // and replaced by [REDACTED].
+        // Input after whitespace collapse: {"api_key":"sk-secret123"}
+        // Match: key":"sk-secret123"} → [REDACTED]
+        // Result: {"api_[REDACTED]
+        String body = "{\"api_key\":\"sk-secret123\"}";
+        String snippet = GroqClient.bodySnippet(body);
+        assertTrue(snippet.contains("[REDACTED]"),
+                "api_key field must be replaced with [REDACTED]");
+        assertFalse(snippet.contains("sk-secret123"),
+                "The secret value must not appear in the snippet after redaction");
+    }
+
+    @Test
+    void bodySnippet_tokenField_secretValueIsRedacted() {
+        // "token" at the start of the key triggers the redaction pattern.
+        // Input after whitespace collapse: {"token":"abc-xyz-789"}
+        // Match starting at 'token': token":"abc-xyz-789"} → [REDACTED]
+        // Result: {"[REDACTED]
+        String body = "{\"token\":\"abc-xyz-789\"}";
+        String snippet = GroqClient.bodySnippet(body);
+        assertTrue(snippet.contains("[REDACTED]"),
+                "token field value must be replaced with [REDACTED]");
+        assertFalse(snippet.contains("abc-xyz-789"),
+                "The token value must not appear in the snippet after redaction");
+    }
+
+    @Test
+    void bodySnippet_neverReturnsNull() {
+        // Contract: the helper never returns null (null input → ""; blank → ""; normal → string).
+        assertNotNull(GroqClient.bodySnippet(null));
+        assertNotNull(GroqClient.bodySnippet(""));
+        assertNotNull(GroqClient.bodySnippet("some body text"));
+    }
 }

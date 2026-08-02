@@ -7,17 +7,34 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.example.usage.ApiKind;
 import org.example.usage.RateLimit;
 import org.example.usage.UsageEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.function.Consumer;
+
+import static net.logstash.logback.argument.StructuredArguments.kv;
 
 public class GroqClient {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final Logger LOG = LoggerFactory.getLogger(GroqClient.class);
+
+    // TCP connect must be quick — for remote providers connectivity is fast, and for the
+    // "Local (Ollama)" provider the loopback connect is instant even during a cold start.
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    // The whole request/response is bounded so a stuck LLM cannot hang the analysis
+    // indefinitely (the "restart the app" bug). Deliberately generous: the local Ollama
+    // model has an observed cold-start of ~120 s on first call, so a short request timeout
+    // would break the first local analysis. 180 s clears that with margin while still
+    // capping an unbounded hang. If a future local model exceeds this, raise it here.
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(180);
 
     // Optional, app-wide: notified with a UsageEvent for every LLM call (tokens used +
     // remaining quota from the rate-limit headers). Set once by the UI. Static because the
@@ -72,12 +89,25 @@ public class GroqClient {
                 jobDescription, initialQuestion, candidateInitialAnswer, followUpQuestion, candidateCv));
     }
 
+    /**
+     * Builds a safe, single-line, ~200-char snippet of an HTTP body for logging.
+     * Applied only to RESPONSE bodies (which never contain the API key — the key travels
+     * in the Authorization header, never the body). Collapses whitespace, redacts any
+     * token/key/authorization-looking field (defense-in-depth; same spirit as
+     * InterviewApp.sanitizeErrorMessage), and truncates. Never returns null.
+     */
+    static String bodySnippet(String body) {
+        if (body == null || body.isBlank()) return "";
+        String oneLine = body.replaceAll("\\s+", " ").trim();
+        String redacted = oneLine.replaceAll(
+                "(?i)(token|key|auth(orization)?)[^\\s]*\\s*[=:]?\\s*\\S+", "[REDACTED]");
+        return redacted.length() <= 200 ? redacted : redacted.substring(0, 200) + "...";
+    }
+
     private static String call(LlmProvider provider, String apiKey, String userPrompt) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", provider.defaultModel());
         body.put("max_tokens", provider.maxTokens());
-        // Disable/limit provider "thinking" so reasoning tokens don't consume the whole
-        // budget and truncate the trailing RATING/follow-up section the parsers need.
         if (provider.reasoningEffort() != null) {
             body.put("reasoning_effort", provider.reasoningEffort());
         }
@@ -91,16 +121,48 @@ public class GroqClient {
                 .uri(URI.create(provider.endpoint()))
                 .header("Authorization", "Bearer " + apiKey)
                 .header("Content-Type", "application/json")
+                .timeout(REQUEST_TIMEOUT)
                 .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
                 .build();
 
-        try (HttpClient client = HttpClient.newHttpClient()) {
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        LOG.info("llm.request",
+                kv("provider", provider.shortName()),
+                kv("model", provider.defaultModel()),
+                kv("endpoint", provider.endpoint()),
+                kv("promptChars", userPrompt.length()),
+                kv("maxTokens", provider.maxTokens()),
+                kv("reasoningEffort", provider.reasoningEffort()));
+
+        long t0 = System.nanoTime();
+        try (HttpClient client = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build()) {
+            HttpResponse<String> response;
+            try {
+                response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            } catch (Exception ex) {
+                // Transport-level failure: timeout (HttpTimeoutException), connection refused,
+                // I/O, interrupt. Log once and rethrow — analyze()/generateExpectedFor() handle UI.
+                long latencyMs = (System.nanoTime() - t0) / 1_000_000;
+                LOG.error("llm.error",
+                        kv("errorClass", ex.getClass().getSimpleName()),
+                        kv("latencyMs", latencyMs),
+                        ex);
+                throw ex;
+            }
+
+            long latencyMs = (System.nanoTime() - t0) / 1_000_000;
             reportUsage(provider, response);
             if (response.statusCode() != 200) {
+                LOG.warn("llm.error",
+                        kv("httpStatus", response.statusCode()),
+                        kv("latencyMs", latencyMs),
+                        kv("bodySnippet", bodySnippet(response.body())));
                 throw new RuntimeException(buildErrorMessage(response.statusCode(), response.body()));
             }
             JsonNode root = MAPPER.readTree(response.body());
+            LOG.info("llm.response",
+                    kv("httpStatus", response.statusCode()),
+                    kv("latencyMs", latencyMs),
+                    kv("tokens", root.path("usage").path("total_tokens").asInt(0)));
             return root.path("choices").get(0).path("message").path("content").asText();
         }
     }

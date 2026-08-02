@@ -1,11 +1,32 @@
 <configuration>
+
+    <!-- Human-readable console for dev/terminal. %X{analysisId} surfaces the per-analysis
+         correlation id when set (renders empty when absent). -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %X{analysisId} %logger{36} - %msg%n</pattern>
         </encoder>
+    </appender>
+
+    <!-- Structured JSON for external ingestion (Loki/ELK/Datadog). LogstashEncoder writes
+         one JSON object per line and automatically includes all MDC entries
+         (analysisId, provider, model, qNumber) plus every StructuredArguments kv(...) field.
+         Path mirrors where the app already stores sessions
+         (${user.home}/Desktop/Flocareer/...), so logs live beside them. The
+         RollingFileAppender creates missing parent directories automatically. -->
+    <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${user.home}/Desktop/Flocareer/logs/app.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${user.home}/Desktop/Flocareer/logs/app-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
     </appender>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="JSON_FILE"/>
     </root>
 </configuration>
