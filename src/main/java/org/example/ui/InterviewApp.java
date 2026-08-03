@@ -40,6 +40,7 @@ import org.example.session.SessionCodec;
 import org.example.stt.GeminiSttProvider;
 import org.example.stt.GroqWhisperModel;
 import org.example.stt.GroqWhisperProvider;
+import org.example.stt.LocalWhisperProvider;
 import org.example.usage.ApiKind;
 import org.example.usage.ApiUsage;
 import org.example.usage.RateLimit;
@@ -141,6 +142,9 @@ public class InterviewApp extends Application {
     private HBox voskModelRow;               // shown only when Vosk is the STT engine
     private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
     private HBox groqModelRow;               // shown only when Groq is the STT engine
+    private TextField whisperLocalUrlField;  // faster-whisper server URL (WHISPER_LOCAL)
+    private TextField whisperLocalModelField; // faster-whisper model id (WHISPER_LOCAL)
+    private HBox whisperLocalRow;            // shown only when Whisper Local is the STT engine
     // "Modelo local" row (shown only when LlmProvider.LOCAL is the analysis provider)
     private HBox        localModelRow;
     private CheckBox    keepWarmToggle;      // "Manter ativo", default OFF
@@ -282,6 +286,25 @@ public class InterviewApp extends Application {
         groqModelRow = new HBox(12, formLabel("Modelo Whisper:"), whisperModelCombo, groqQuotaGauge);
         groqModelRow.setAlignment(Pos.CENTER_LEFT);
 
+        // ── Whisper Local row (shown only when Whisper Local is the STT engine) ─────
+        whisperLocalUrlField = new TextField(LocalWhisperProvider.DEFAULT_BASE_URL);
+        whisperLocalUrlField.setStyle(FORM_FONT_STYLE);
+        whisperLocalUrlField.getStyleClass().add("field");
+        whisperLocalUrlField.setTooltip(new Tooltip(
+                "URL do servidor faster-whisper local, compatível com OpenAI (ex.: http://localhost:8000)"));
+        HBox.setHgrow(whisperLocalUrlField, Priority.ALWAYS);
+
+        whisperLocalModelField = new TextField(LocalWhisperProvider.DEFAULT_MODEL);
+        whisperLocalModelField.setStyle(FORM_FONT_STYLE);
+        whisperLocalModelField.getStyleClass().add("field");
+        whisperLocalModelField.setTooltip(new Tooltip(
+                "Modelo faster-whisper. Medium é o equilíbrio; Systran/faster-whisper-large-v3 para máxima precisão de sotaque."));
+        HBox.setHgrow(whisperLocalModelField, Priority.ALWAYS);
+
+        whisperLocalRow = new HBox(8, formLabel("Whisper Local:"), whisperLocalUrlField,
+                formLabel("Modelo:"), whisperLocalModelField);
+        whisperLocalRow.setAlignment(Pos.CENTER_LEFT);
+
         // ── Local Ollama model row (shown only when LOCAL is the analysis provider) ──
         keepWarmToggle = new CheckBox("Manter ativo");
         keepWarmToggle.setSelected(false);
@@ -403,7 +426,7 @@ public class InterviewApp extends Application {
                 vertSep, fontLabel, fontDecBtn, fontIncBtn);
         row4.setAlignment(Pos.CENTER_LEFT);
 
-        VBox controls = new VBox(8, keysPane, row1, voskModelRow, groqModelRow, localModelRow, row2, row3, row4);
+        VBox controls = new VBox(8, keysPane, row1, voskModelRow, groqModelRow, whisperLocalRow, localModelRow, row2, row3, row4);
         controls.setPadding(new Insets(10));
 
         // ── Questions scroll area ────────────────────────────────────────────
@@ -635,6 +658,7 @@ public class InterviewApp extends Application {
         SttEngine engine = sttEngineCombo.getValue();
         boolean vosk = engine == SttEngine.VOSK;
         boolean groq = engine == SttEngine.GROQ_WHISPER;
+        boolean whisperLocal = engine == SttEngine.WHISPER_LOCAL;
         if (voskModelRow != null) {
             voskModelRow.setVisible(vosk);
             voskModelRow.setManaged(vosk);   // collapse layout space when hidden
@@ -642,6 +666,10 @@ public class InterviewApp extends Application {
         if (groqModelRow != null) {
             groqModelRow.setVisible(groq);
             groqModelRow.setManaged(groq);
+        }
+        if (whisperLocalRow != null) {
+            whisperLocalRow.setVisible(whisperLocal);
+            whisperLocalRow.setManaged(whisperLocal);
         }
     }
 
@@ -979,6 +1007,19 @@ public class InterviewApp extends Application {
                 GeminiSttProvider gemini = new GeminiSttProvider(key, channelId);
                 gemini.setUsageListener(ev -> Platform.runLater(() -> onUsage(ev)));
                 yield gemini;
+            }
+            case WHISPER_LOCAL -> {
+                String base  = whisperLocalUrlField.getText().trim();
+                String model = whisperLocalModelField.getText().trim();
+                if (base.isEmpty() || model.isEmpty()) {
+                    showAlert("Whisper Local incompleto",
+                            "Informe o servidor e o modelo do Whisper local (ex.: "
+                            + "http://localhost:8000 e Systran/faster-whisper-medium).");
+                    yield null;
+                }
+                LocalWhisperProvider whisper = new LocalWhisperProvider(base, model, channelId);
+                whisper.setUsageListener(ev -> Platform.runLater(() -> onUsage(ev)));
+                yield whisper;
             }
         };
     }
