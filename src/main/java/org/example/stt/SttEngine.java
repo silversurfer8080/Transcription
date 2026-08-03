@@ -5,7 +5,8 @@ package org.example.stt;
  *
  * <p>Each value maps to a concrete {@link SpeechToTextProvider}; the app builds the
  * provider from the selected engine plus the relevant credential (an API key for
- * {@link #GROQ_WHISPER}/{@link #GEMINI}, or a local model directory for {@link #VOSK}).
+ * {@link #GROQ_WHISPER}/{@link #GEMINI}, a local model directory for {@link #VOSK}, or a
+ * local server URL + model id for {@link #WHISPER_LOCAL}).
  */
 public enum SttEngine {
 
@@ -16,7 +17,13 @@ public enum SttEngine {
     GROQ_WHISPER("Groq Whisper"),
 
     /** Google Gemini multimodal transcription (batch). Independent free tier from Groq. */
-    GEMINI("Google Gemini");
+    GEMINI("Google Gemini"),
+
+    /**
+     * Local faster-whisper server (OpenAI-compatible) — offline, unlimited, accent-robust.
+     * The sustainable answer once every cloud free tier exhausts; needs a running local server.
+     */
+    WHISPER_LOCAL("Whisper Local — offline, ilimitado");
 
     private final String label;
 
