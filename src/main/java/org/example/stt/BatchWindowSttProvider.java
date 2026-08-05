@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.sound.sampled.AudioFormat;
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -44,8 +45,22 @@ public abstract class BatchWindowSttProvider implements SpeechToTextProvider {
     // Skip windows shorter than ~0.25 s of audio (8000 bytes @ 16 kHz/16-bit/mono).
     protected static final int MIN_BYTES = 8_000;
 
+    // 16 kHz / 16-bit / mono canonical capture -> 32000 bytes per audio-second.
+    private static final int BYTES_PER_SECOND = 16_000 * 2;
+    // With a window cap set, once the backlog grows past this many windows the oldest audio is
+    // dropped to bound memory and latency. A runaway only happens if the backend is slower than
+    // real time; a warning is logged so it surfaces in the structured logs.
+    private static final int BACKLOG_WINDOWS = 12;
+    private static final byte[] EMPTY = new byte[0];
+
     protected final String channelId;
     protected final long flushMillis;
+    // Cap on the audio-bytes handed to transcribe() per flush (0 = unlimited). A slow backend
+    // otherwise gets ever-larger clips (whole-buffer drain), so each transcription takes longer
+    // and the lag spirals. With a cap set, windows stay bounded and the loop catches up
+    // back-to-back. Cloud providers leave this 0, keeping their exact original behavior.
+    protected final int maxWindowBytes;
+    private final int maxBacklogBytes;
 
     protected AudioFormat format;
     private Consumer<TranscriptEvent> onResult;
@@ -57,8 +72,20 @@ public abstract class BatchWindowSttProvider implements SpeechToTextProvider {
     protected final AtomicBoolean running = new AtomicBoolean(false);
 
     protected BatchWindowSttProvider(String channelId, long flushMillis) {
+        this(channelId, flushMillis, 0);
+    }
+
+    /**
+     * @param maxWindowBytes cap on the PCM bytes transcribed per flush (0 = unlimited, the
+     *                       whole-buffer drain used by the cloud providers). A local/slow
+     *                       backend should cap this (e.g. 5 s) so a lagging backend never gets
+     *                       ever-larger clips.
+     */
+    protected BatchWindowSttProvider(String channelId, long flushMillis, int maxWindowBytes) {
         this.channelId = channelId;
         this.flushMillis = flushMillis;
+        this.maxWindowBytes = Math.max(0, maxWindowBytes);
+        this.maxBacklogBytes = this.maxWindowBytes > 0 ? this.maxWindowBytes * BACKLOG_WINDOWS : 0;
     }
 
     @Override
@@ -130,11 +157,16 @@ public abstract class BatchWindowSttProvider implements SpeechToTextProvider {
 
     private void runFlushLoop() {
         while (running.get()) {
-            try {
-                Thread.sleep(flushMillis);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;   // stop() performs the final flush
+            // Sleep the normal interval only when caught up. When a full window is already
+            // backlogged (a slow backend), process windows back-to-back to catch up instead of
+            // waiting another interval. Uncapped providers always sleep (unchanged cadence).
+            if (!hasFullWindowBacklog()) {
+                try {
+                    Thread.sleep(flushMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;   // stop() performs the final flush
+                }
             }
             try {
                 flushOnce();
@@ -144,13 +176,36 @@ public abstract class BatchWindowSttProvider implements SpeechToTextProvider {
         }
     }
 
-    /** Atomically drains the buffer and, if it holds speech, transcribes it. */
+    private boolean hasFullWindowBacklog() {
+        if (maxWindowBytes <= 0) return false;   // uncapped providers keep the fixed cadence
+        synchronized (bufLock) {
+            return buffer.size() >= maxWindowBytes;
+        }
+    }
+
+    /**
+     * Atomically drains up to one window from the buffer and, if it holds speech, transcribes it.
+     * With {@link #maxWindowBytes} set, the window is capped (the excess stays buffered for the
+     * next flush) and a runaway backlog drops its oldest audio; with it 0 the whole buffer is
+     * drained as before.
+     */
     private void flushOnce() throws Exception {
         byte[] pcm;
+        int droppedBytes;
         synchronized (bufLock) {
             if (buffer.size() < MIN_BYTES) return;
-            pcm = buffer.toByteArray();
+            byte[] all = buffer.toByteArray();
             buffer.reset();
+            WindowSplit split = splitWindow(all, maxWindowBytes, maxBacklogBytes);
+            pcm = split.window();
+            droppedBytes = split.droppedBytes();
+            if (split.remainder().length > 0) {
+                buffer.write(split.remainder(), 0, split.remainder().length);   // re-buffer the excess
+            }
+        }
+        if (droppedBytes > 0) {
+            log.warn("{} fell behind real time; dropped {}s of oldest audio to catch up (channel={})",
+                    providerName(), String.format("%.1f", droppedBytes / (double) BYTES_PER_SECOND), channelId);
         }
         if (isSilent(pcm)) {
             log.debug("Skipping silent {}-byte window (channel={})", pcm.length, channelId);
@@ -160,6 +215,31 @@ public abstract class BatchWindowSttProvider implements SpeechToTextProvider {
         if (text != null && !text.isBlank()) {
             onResult.accept(new TranscriptEvent(text.trim(), true, -1, channelId));
         }
+    }
+
+    /** The split of a drained buffer into the window to transcribe now, the excess to re-buffer,
+     *  and how many oldest bytes were dropped as a runaway-backlog safety valve. */
+    record WindowSplit(byte[] window, byte[] remainder, int droppedBytes) {}
+
+    /**
+     * Splits {@code all} into (window, remainder, droppedBytes). With {@code maxWindowBytes <= 0}
+     * the whole array is the window (unchanged behavior). Otherwise: if the backlog exceeds
+     * {@code maxBacklogBytes} the oldest excess is dropped; then at most {@code maxWindowBytes}
+     * (the oldest remaining) becomes the window and the rest is the remainder to re-buffer.
+     */
+    static WindowSplit splitWindow(byte[] all, int maxWindowBytes, int maxBacklogBytes) {
+        if (maxWindowBytes <= 0) return new WindowSplit(all, EMPTY, 0);
+        int start = 0;
+        if (maxBacklogBytes > 0 && all.length > maxBacklogBytes) {
+            start = all.length - maxBacklogBytes;   // keep only the most recent maxBacklogBytes
+        }
+        if (all.length - start > maxWindowBytes) {
+            byte[] window    = Arrays.copyOfRange(all, start, start + maxWindowBytes);
+            byte[] remainder = Arrays.copyOfRange(all, start + maxWindowBytes, all.length);
+            return new WindowSplit(window, remainder, start);
+        }
+        byte[] window = (start == 0) ? all : Arrays.copyOfRange(all, start, all.length);
+        return new WindowSplit(window, EMPTY, start);
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────

@@ -51,6 +51,9 @@ public class LocalWhisperProvider extends BatchWindowSttProvider {
     // first request can load (or download) the model. Still bounds an indefinite hang.
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(120);
     private static final int BYTES_PER_SECOND = 16_000 * 2;   // 16 kHz mono 16-bit
+    // Cap each transcription at 5 s of audio so a slow local backend never gets ever-larger
+    // clips; the base re-buffers the excess and catches up back-to-back.
+    private static final int WINDOW_CAP_BYTES = 5 * BYTES_PER_SECOND;
 
     private final String endpoint;   // full /v1/audio/transcriptions URL
     private final String model;
@@ -64,7 +67,7 @@ public class LocalWhisperProvider extends BatchWindowSttProvider {
 
     public LocalWhisperProvider(String baseUrl, String model, String channelId,
                                 String language, long flushMillis) {
-        super(channelId, flushMillis);
+        super(channelId, flushMillis, WINDOW_CAP_BYTES);
         this.endpoint = endpointUrl(baseUrl);
         this.model = model;
         this.language = language;
