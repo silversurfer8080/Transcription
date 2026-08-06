@@ -143,7 +143,7 @@ public class InterviewApp extends Application {
     private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
     private HBox groqModelRow;               // shown only when Groq is the STT engine
     private TextField whisperLocalUrlField;  // faster-whisper server URL (WHISPER_LOCAL)
-    private TextField whisperLocalModelField; // faster-whisper model id (WHISPER_LOCAL)
+    private ComboBox<String> whisperLocalModelCombo; // faster-whisper model id (editable) (WHISPER_LOCAL)
     private HBox whisperLocalRow;            // shown only when Whisper Local is the STT engine
     // "Modelo local" row (shown only when LlmProvider.LOCAL is the analysis provider)
     private HBox        localModelRow;
@@ -294,15 +294,23 @@ public class InterviewApp extends Application {
                 "URL do servidor faster-whisper local, compatível com OpenAI (ex.: http://localhost:8000)"));
         HBox.setHgrow(whisperLocalUrlField, Priority.ALWAYS);
 
-        whisperLocalModelField = new TextField(LocalWhisperProvider.DEFAULT_MODEL);
-        whisperLocalModelField.setStyle(FORM_FONT_STYLE);
-        whisperLocalModelField.getStyleClass().add("field");
-        whisperLocalModelField.setTooltip(new Tooltip(
-                "Modelo faster-whisper. Medium é o equilíbrio; Systran/faster-whisper-large-v3 para máxima precisão de sotaque."));
-        HBox.setHgrow(whisperLocalModelField, Priority.ALWAYS);
+        // Editable so a power user can still type any faster-whisper model id the server knows.
+        whisperLocalModelCombo = new ComboBox<>(FXCollections.observableArrayList(
+                "deepdml/faster-whisper-large-v3-turbo-ct2",       // fast + accurate (recommended)
+                "Zoont/faster-whisper-large-v3-turbo-int8-ct2",    // fastest (int8 turbo)
+                "Systran/faster-whisper-medium",                    // balance
+                "Systran/faster-whisper-large-v3",                  // max accuracy, slowest
+                "abhijithmallya/Whisper-Indian-English-ct2"));      // Indian-English accent specialist
+        whisperLocalModelCombo.setEditable(true);
+        whisperLocalModelCombo.setValue("deepdml/faster-whisper-large-v3-turbo-ct2");
+        whisperLocalModelCombo.setStyle(FORM_FONT_STYLE);
+        whisperLocalModelCombo.setTooltip(new Tooltip(
+                "Turbo = rápido + preciso (recomendado); int8 = mais rápido; large-v3 = máxima precisão, mais lento; "
+                + "Indian-English = especializado em sotaque indiano. Editável: pode digitar outro id."));
+        HBox.setHgrow(whisperLocalModelCombo, Priority.ALWAYS);
 
         whisperLocalRow = new HBox(8, formLabel("Whisper Local:"), whisperLocalUrlField,
-                formLabel("Modelo:"), whisperLocalModelField);
+                formLabel("Modelo:"), whisperLocalModelCombo);
         whisperLocalRow.setAlignment(Pos.CENTER_LEFT);
 
         // ── Local Ollama model row (shown only when LOCAL is the analysis provider) ──
@@ -1010,7 +1018,11 @@ public class InterviewApp extends Application {
             }
             case WHISPER_LOCAL -> {
                 String base  = whisperLocalUrlField.getText().trim();
-                String model = whisperLocalModelField.getText().trim();
+                // Editable combo: the editor text reflects both a picked item and a typed id.
+                String model = whisperLocalModelCombo.getEditor().getText().trim();
+                if (model.isEmpty() && whisperLocalModelCombo.getValue() != null) {
+                    model = whisperLocalModelCombo.getValue().trim();
+                }
                 if (base.isEmpty() || model.isEmpty()) {
                     showAlert("Whisper Local incompleto",
                             "Informe o servidor e o modelo do Whisper local (ex.: "
