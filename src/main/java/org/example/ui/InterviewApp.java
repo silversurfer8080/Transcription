@@ -142,9 +142,9 @@ public class InterviewApp extends Application {
     private HBox voskModelRow;               // shown only when Vosk is the STT engine
     private ComboBox<GroqWhisperModel> whisperModelCombo;  // Groq Whisper model (turbo / large-v3)
     private HBox groqModelRow;               // shown only when Groq is the STT engine
-    private TextField whisperLocalUrlField;  // faster-whisper server URL (WHISPER_LOCAL)
+    private TextField whisperLocalUrlField;  // faster-whisper server URL (WHISPER_LOCAL); behind "Avançado"
     private ComboBox<String> whisperLocalModelCombo; // faster-whisper model id (editable) (WHISPER_LOCAL)
-    private HBox whisperLocalRow;            // shown only when Whisper Local is the STT engine
+    private VBox whisperLocalRow;            // shown only when Whisper Local is the STT engine
     // "Modelo local" row (shown only when LlmProvider.LOCAL is the analysis provider)
     private HBox        localModelRow;
     private CheckBox    keepWarmToggle;      // "Manter ativo", default OFF
@@ -309,9 +309,27 @@ public class InterviewApp extends Application {
                 + "Indian-English = especializado em sotaque indiano. Editável: pode digitar outro id."));
         HBox.setHgrow(whisperLocalModelCombo, Priority.ALWAYS);
 
-        whisperLocalRow = new HBox(8, formLabel("Whisper Local:"), whisperLocalUrlField,
-                formLabel("Modelo:"), whisperLocalModelCombo);
-        whisperLocalRow.setAlignment(Pos.CENTER_LEFT);
+        // "Avançado" reveals the server URL, which almost never changes (same machine, port 8000).
+        CheckBox whisperLocalAdvanced = new CheckBox("Avançado");
+        whisperLocalAdvanced.setStyle(FORM_FONT_STYLE);
+        whisperLocalAdvanced.setTooltip(new Tooltip(
+                "Mostra o endereço do servidor — só precisa mudar se o Whisper rodar em outra porta ou máquina."));
+
+        HBox whisperLocalMainRow = new HBox(8,
+                formLabel("Modelo (Whisper Local):"), whisperLocalModelCombo, whisperLocalAdvanced);
+        whisperLocalMainRow.setAlignment(Pos.CENTER_LEFT);
+
+        HBox whisperLocalServerRow = new HBox(8, formLabel("Servidor:"), whisperLocalUrlField);
+        whisperLocalServerRow.setAlignment(Pos.CENTER_LEFT);
+        whisperLocalServerRow.setVisible(false);
+        whisperLocalServerRow.setManaged(false);   // hidden until "Avançado" is checked
+        whisperLocalAdvanced.setOnAction(e -> {
+            boolean adv = whisperLocalAdvanced.isSelected();
+            whisperLocalServerRow.setVisible(adv);
+            whisperLocalServerRow.setManaged(adv);
+        });
+
+        whisperLocalRow = new VBox(6, whisperLocalMainRow, whisperLocalServerRow);
 
         // ── Local Ollama model row (shown only when LOCAL is the analysis provider) ──
         keepWarmToggle = new CheckBox("Manter ativo");
